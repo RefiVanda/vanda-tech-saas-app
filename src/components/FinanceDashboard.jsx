@@ -70,7 +70,7 @@ const FinanceDashboard = () => {
   });
   
   useEffect(() => {
-    const session = JSON.parse(localStorage.getItem('syntegra_user_session'));
+    const session = JSON.parse(localStorage.getItem('vest_user_session'));
     if (!session) { navigate('/login'); return; }
     if (!session.can_access_finance && session.role !== 'admin' && session.role !== 'direksi') {
       alert('Anda tidak memiliki akses ke Modul Finance');
@@ -599,7 +599,7 @@ const FinanceDashboard = () => {
            <div className="flex items-center gap-3">
              <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center font-black text-slate-950">F</div>
              <div>
-                <h1 className="font-black text-white leading-tight">Syntegra<span className="text-emerald-500">Finance</span></h1>
+                <h1 className="font-black text-white leading-tight">vest<span className="text-emerald-500">Finance</span></h1>
                 <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">ERP System</p>
              </div>
            </div>
@@ -1731,11 +1731,11 @@ const FinanceDashboard = () => {
                {/* 1. Header Perusahaan & Tulisan INVOICE */}
                <div className="flex justify-between items-start border-b-[3px] border-slate-800 pb-6 mb-6">
                   <div className="max-w-sm">
-                     <h1 className="text-2xl font-black text-slate-900 uppercase tracking-wider">{sysConfig?.brandName || 'SYNTEGRA SERVICES'}</h1>
+                     <h1 className="text-2xl font-black text-slate-900 uppercase tracking-wider">{sysConfig?.brandName || 'vest SERVICES'}</h1>
                      <p className="text-xs text-slate-600 mt-2 leading-relaxed font-medium">
                        Gedung Perkantoran Pusat, Lantai 3<br/>
                        Jl. Jalur Utama No. 123, Banten, Indonesia<br/>
-                       Telp: (021) 1234-5678 | Email: finance@syntegra.co.id
+                       Telp: (021) 1234-5678 | Email: finance@vest.co.id
                      </p>
                   </div>
                   <div className="text-right">
@@ -1805,7 +1805,7 @@ const FinanceDashboard = () => {
                      <div className="border border-slate-300 rounded-lg p-4 bg-slate-50">
                        <h4 className="text-xs font-black text-slate-700 uppercase mb-2">Informasi Pembayaran:</h4>
                        <p className="text-xs text-slate-600 whitespace-pre-wrap leading-relaxed font-medium">
-                         {viewInvoice.notes || "Mohon lakukan pembayaran penuh sebelum jatuh tempo melalui transfer ke rekening berikut:\n\nBank: MANDIRI\nNo. Rek: 123-456-7890\nAtas Nama: PT. SYNTEGRA SERVICES"}
+                         {viewInvoice.notes || "Mohon lakukan pembayaran penuh sebelum jatuh tempo melalui transfer ke rekening berikut:\n\nBank: MANDIRI\nNo. Rek: 123-456-7890\nAtas Nama: PT. vest SERVICES"}
                        </p>
                      </div>
                   </div>
@@ -1842,7 +1842,7 @@ const FinanceDashboard = () => {
                   <div className="text-center w-48">
                      <p className="text-xs font-bold text-slate-500 mb-20">Hormat Kami,</p>
                      <p className="border-b border-slate-800 mb-1.5 font-black text-slate-900">Finance & Accounting</p>
-                     <p className="text-[11px] font-bold text-slate-600 uppercase tracking-widest">{sysConfig?.brandName || 'SYNTEGRA SERVICES'}</p>
+                     <p className="text-[11px] font-bold text-slate-600 uppercase tracking-widest">{sysConfig?.brandName || 'vest SERVICES'}</p>
                   </div>
                </div>
                

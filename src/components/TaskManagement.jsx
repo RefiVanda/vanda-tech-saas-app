@@ -113,7 +113,7 @@ export default function TaskManagement() {
   };
   
   const [sysConfig, setSysConfig] = useState({ 
-    brandName: 'SYNTEGRA SERVICES', 
+    brandName: 'V.E.S.T SERVICES', 
     autoEmail: false, 
     maintenanceMode: false,
     maxUploadSize: '5',
@@ -632,7 +632,7 @@ export default function TaskManagement() {
   const chatEndRef = useRef(null);
 
   useEffect(() => {
-    const activeSession = localStorage.getItem('syntegra_user_session');
+    const activeSession = localStorage.getItem('vest_user_session');
     if (activeSession) {
       setCurrentUser(JSON.parse(activeSession)); 
     } else {
@@ -728,7 +728,7 @@ export default function TaskManagement() {
 
   
   const handleLogout = () => {
-    localStorage.removeItem('syntegra_user_session');
+    localStorage.removeItem('vest_user_session');
     localStorage.removeItem('isAuthenticated');
     setCurrentUser(null);
     navigate('/login');
@@ -1272,7 +1272,6 @@ export default function TaskManagement() {
             {currentUser.role === 'admin' && (
               <div className={`pt-4 border-t border-slate-100 mt-4 ${!isSidebarOpen && 'flex flex-col items-center'}`}>
                  {isSidebarOpen && <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 px-3 whitespace-nowrap">Sistem Super Admin</p>}
-                 <button type="button" title="Kelola Pengguna" onClick={() => navigateTo('admin_users')} className={`w-full flex items-center ${isSidebarOpen ? 'justify-start px-4' : 'justify-center px-0'} py-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'admin_users' ? 'bg-blue-50 text-blue-700 border border-blue-100/50 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}><UserPlus className="w-5 h-5 shrink-0" /> {isSidebarOpen && <span className="ml-3 whitespace-nowrap">Kelola Pengguna</span>}</button>
                  <button type="button" title="Konfigurasi Sistem" onClick={() => navigateTo('admin_settings')} className={`w-full flex items-center ${isSidebarOpen ? 'justify-start px-4' : 'justify-center px-0'} py-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'admin_settings' ? 'bg-blue-50 text-blue-700 border border-blue-100/50 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}><Settings className="w-5 h-5 shrink-0" /> {isSidebarOpen && <span className="ml-3 whitespace-nowrap">Pengaturan Sistem</span>}</button>
               </div>
             )}
@@ -1374,23 +1373,6 @@ export default function TaskManagement() {
                    <Plus className="w-4 h-4 md:w-5 md:h-5" /> {currentUser.role === 'staff' ? 'Tugas Baru' : 'Instruksi Baru'}
                  </button>
                )}
-               {activeTab === 'admin_users' && (
-                <div className="flex flex-wrap items-center gap-2 flex-1 justify-end md:flex-none">
-                  <button type="button" onClick={() => setIsMassUserModalOpen(true)} className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 px-3 py-2 md:px-4 md:py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition-all text-xs md:text-sm">
-                    <Users className="w-4 h-4" /> Input Tabel
-                  </button>
-                  <button type="button" onClick={handleDownloadTemplateCSV} className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 px-3 py-2 md:px-4 md:py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition-all text-xs md:text-sm">
-                    <Download className="w-4 h-4" /> Template CSV
-                  </button>
-                  <input type="file" id="upload-massal-user" accept=".csv" onChange={handleMassUploadCSV} className="hidden" />
-                  <label htmlFor="upload-massal-user" className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 px-3 py-2 md:px-4 md:py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition-all text-xs md:text-sm cursor-pointer">
-                    <Paperclip className="w-4 h-4" /> Import CSV
-                  </label>
-                  <button type="button" onClick={() => setIsUserModalOpen(true)} className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2.5 md:px-6 md:py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all text-xs md:text-sm">
-                    <UserPlus className="w-4 h-4 md:w-5 md:h-5" /> Tambah Manual
-                  </button>
-                </div>
-              )}
             </div>
           </div>
 
@@ -1960,92 +1942,6 @@ export default function TaskManagement() {
             </div>
           )}
 
-          {/* TAB: KELOLA PENGGUNA */}
-          {activeTab === 'admin_users' && currentUser.role === 'admin' && (
-            <div className="space-y-4 md:space-y-6 animate-in fade-in duration-300 md:p-10 pb-28 md:pb-0">
-              <Card className="border-0 shadow-sm overflow-hidden bg-white">
-                 <div className="p-4 md:p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                   <div className="flex items-center gap-3">
-                     <h3 className="font-black text-base md:text-xl text-slate-800 flex items-center gap-2 shrink-0"><Users className="w-4 h-4 md:w-5 md:h-5 text-blue-500"/> Kelola Daftar Pengguna</h3>
-                     {selectedUsers.length > 0 && (
-                       <button type="button" onClick={handleBulkDeleteUsers} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-xs font-bold border border-red-200 transition-colors animate-in zoom-in">
-                         <Trash2 className="w-3.5 h-3.5" /> Hapus {selectedUsers.length} Terpilih
-                       </button>
-                     )}
-                   </div>
-                   
-                   <div className="relative w-full md:w-64 shrink-0">
-                     <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                     <input type="text" placeholder="Cari nama atau NIK..." value={userSearchQuery} onChange={(e) => setUserSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-xs md:text-sm font-bold focus:border-blue-500 outline-none bg-slate-50 focus:bg-white transition-colors" />
-                   </div>
-                 </div>
-
-                 <div className="overflow-auto w-full max-h-[65vh] md:max-h-[75vh] custom-scrollbar pb-2 relative">
-                    <table className="w-full text-left border-collapse min-w-[500px]">
-                      <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
-                        <tr className="text-slate-400 text-[9px] md:text-[10px] uppercase tracking-widest font-black border-b border-slate-200">
-                          <th className="p-3 md:p-5 w-10 text-center bg-slate-50">
-                            <input 
-                              type="checkbox" 
-                              className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                              checked={selectedUsers.length > 0 && selectedUsers.length === users.filter(u => (!userSearchQuery || (u.name || '').toLowerCase().includes(userSearchQuery.toLowerCase()) || (u.nik || '').toLowerCase().includes(userSearchQuery.toLowerCase())) && u.role !== 'admin').length}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  const selectable = users.filter(u => (!userSearchQuery || (u.name || '').toLowerCase().includes(userSearchQuery.toLowerCase()) || (u.nik || '').toLowerCase().includes(userSearchQuery.toLowerCase())) && u.role !== 'admin');
-                                  setSelectedUsers(selectable.map(u => u.id));
-                                } else {
-                                  setSelectedUsers([]);
-                                }
-                              }}
-                            />
-                          </th>
-                          <th className="p-3 md:p-5 bg-slate-50">Pengguna & NIK</th>
-                          <th className="p-3 md:p-5 bg-slate-50">Role Sistem</th>
-                          <th className="p-3 md:p-5 bg-slate-50">Divisi</th>
-                          <th className="p-3 md:p-5 text-right bg-slate-50">Aksi</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {users.filter(u => {
-                            if (!userSearchQuery) return true;
-                            const query = userSearchQuery.toLowerCase();
-                            return ((u.name || '').toLowerCase().includes(query) || (u.nik || '').toLowerCase().includes(query));
-                          }).map(u => (
-                          <tr key={u.id} className={`border-b hover:bg-slate-50/50 transition-colors ${selectedUsers.includes(u.id) ? 'bg-blue-50/30 border-blue-100' : 'border-slate-50'}`}>
-                             <td className="p-3 md:p-5 text-center">
-                               {u.role !== 'admin' && (
-                                 <input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" checked={selectedUsers.includes(u.id)} onChange={() => setSelectedUsers(prev => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id])} />
-                               )}
-                             </td>
-                             <td className="p-3 md:p-5 flex items-center gap-3">
-                               <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-black text-[10px] md:text-xs shrink-0">{u.avatar}</div>
-                               <div>
-                                 <span className="font-bold text-slate-800 block text-xs md:text-sm">{u.name || 'Tanpa Nama'}</span>
-                                 <span className="text-[9px] md:text-[10px] text-slate-500">{u.position} • <span className="font-bold text-blue-500">{u.nik}</span></span>
-                               </div>
-                             </td>
-                             <td className="p-3 md:p-5"><Badge type={u.role === 'admin' ? 'admin' : u.role === 'direksi' ? 'high' : u.role === 'manager' ? 'low' : 'done'}>{u.role}</Badge></td>
-                             <td className="p-3 md:p-5 font-bold text-slate-600 text-[10px] md:text-xs">{u.division}</td>
-                             <td className="p-3 md:p-5 text-right">
-                               <div className="flex justify-end gap-1.5 md:gap-2">
-                                   <button type="button" onClick={() => {setEditingUser(u); setIsEditUserModalOpen(true);}} className="p-1.5 md:p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg shadow-sm"><Edit className="w-3.5 h-3.5 md:w-4 md:h-4"/></button>
-                                   {u.id !== currentUser.id && u.role !== 'admin' && (
-                                     <button type="button" onClick={() => handleDeleteUser(u.id)} className="p-1.5 md:p-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg shadow-sm"><Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4"/></button>
-                                   )}
-                               </div>
-                             </td>
-                          </tr>
-                        ))}
-                        {users.filter(u => !userSearchQuery || (u.name || '').toLowerCase().includes(userSearchQuery.toLowerCase()) || (u.nik || '').toLowerCase().includes(userSearchQuery.toLowerCase())).length === 0 && (
-                          <tr><td colSpan="5" className="p-8 text-center text-sm font-bold text-slate-400">Pengguna tidak ditemukan.</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                 </div>
-              </Card>
-            </div>
-          )}
-
           {/* TAB: PENGATURAN */}
           {activeTab === 'admin_settings' && currentUser.role === 'admin' && (
             <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 md:p-8 pb-32 md:pb-10">
@@ -2177,66 +2073,6 @@ export default function TaskManagement() {
                     </div>
                     <div className={`w-12 h-6 md:w-14 md:h-7 ${configForm.maintenanceMode ? 'bg-red-500' : 'bg-slate-200'} rounded-full relative transition-colors duration-300 shrink-0 shadow-inner`}><div className={`w-4 h-4 md:w-5 md:h-5 bg-white rounded-full shadow-md absolute top-1 md:top-1 transition-transform duration-300 ${configForm.maintenanceMode ? 'translate-x-7 md:translate-x-8' : 'translate-x-1'}`}></div></div>
                   </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden">
-                <div className="bg-slate-50/50 px-5 py-4 border-b border-slate-100">
-                  <h4 className="text-xs font-black text-purple-600 uppercase tracking-widest flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-purple-500"></span> Pemetaan Hak Akses Direksi
-                  </h4>
-                </div>
-                <div className="p-5 md:p-7 space-y-4">
-                   {users.filter(u => u.role === 'direksi').length === 0 ? (
-                      <p className="text-sm font-bold text-slate-400">Belum ada pengguna dengan role Direksi.</p>
-                   ) : (
-                      users.filter(u => u.role === 'direksi').map(direktur => (
-                         <div key={direktur.id} className="p-4 border border-slate-200 rounded-xl bg-slate-50/50">
-                            <div className="flex justify-between items-center mb-3 pb-3 border-b border-slate-200/60">
-                               <div>
-                                  <span className="font-black text-slate-800 text-sm md:text-base">{direktur.name}</span>
-                                  <span className="text-[10px] ml-2 font-bold text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200 shadow-sm">NIK: {direktur.nik}</span>
-                               </div>
-                               <button 
-                                  onClick={() => handleSaveDirekturAccess(direktur)}
-                                  className="text-[10px] md:text-xs font-black bg-blue-600 text-white px-4 py-2 rounded-xl shadow-sm hover:bg-blue-700 transition-colors"
-                               >
-                                  Simpan Akses
-                               </button>
-                            </div>
-                            
-                            <label className="flex items-center gap-2 cursor-pointer mb-3">
-                               <input type="checkbox" 
-                                  checked={direktur.crossDivision || false}
-                                  onChange={(e) => {
-                                     setUsers(users.map(u => u.id === direktur.id ? {...u, crossDivision: e.target.checked} : u));
-                                  }}
-                                  className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500 cursor-pointer"
-                               />
-                               <span className="text-xs font-black text-purple-800">Beri Akses Penuh ke Semua Divisi</span>
-                            </label>
-                            
-                            {!direktur.crossDivision && (
-                               <div className="pl-6 border-l-2 border-purple-200 flex flex-wrap gap-2 mt-2">
-                                  {divisions.map(div => (
-                                     <label key={div} className="flex items-center gap-1.5 p-2 bg-white border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-100 shadow-sm transition-colors">
-                                        <input type="checkbox"
-                                            checked={(direktur.accessible_divisions || []).includes(div)}
-                                            onChange={(e) => {
-                                                const current = direktur.accessible_divisions || [];
-                                                const updated = e.target.checked ? [...current, div] : current.filter(d => d !== div);
-                                                setUsers(users.map(u => u.id === direktur.id ? {...u, accessible_divisions: updated} : u));
-                                            }}
-                                            className="w-4 h-4 text-blue-600 rounded border-slate-300 cursor-pointer"
-                                        />
-                                        <span className="text-[10px] md:text-xs font-bold text-slate-700">{div}</span>
-                                     </label>
-                                  ))}
-                               </div>
-                            )}
-                         </div>
-                      ))
-                   )}
                 </div>
               </div>
               
@@ -2622,199 +2458,6 @@ export default function TaskManagement() {
             </div>
           )}
 
-          {/* === MODAL 3: TAMBAH PENGGUNA === */}
-          {isUserModalOpen && (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[80] flex justify-end md:justify-center items-end md:items-center md:p-4 print:hidden">
-              <Card className="w-full h-[90vh] md:h-auto md:max-w-xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-full md:zoom-in duration-300 border-0 shadow-[0_-20px_50px_rgba(0,0,0,0.15)] md:shadow-2xl rounded-t-[2rem] rounded-b-none md:rounded-2xl mt-auto md:mt-0 relative bg-white">
-                <div className="px-5 py-4 md:px-8 md:py-6 border-b border-slate-800 flex justify-between items-center bg-slate-900 text-white shrink-0">
-                  <div>
-                     <h3 className="font-black text-base md:text-xl tracking-tight">Tambah Pengguna</h3>
-                     <p className="text-slate-400 text-[12px] md:text-[13px] font-medium mt-0.5">Buat akun untuk karyawan baru.</p>
-                  </div>
-                  <button type="button" onClick={() => setIsUserModalOpen(false)} className="bg-white/10 p-2 rounded-full hover:bg-white/20 transition-colors"><X className="w-4 h-4 md:w-5 md:h-5" /></button>
-                </div>
-                <form onSubmit={handleCreateUser} className="flex flex-col flex-1 min-h-0">
-                  <div className="overflow-y-auto custom-scrollbar flex-1 bg-white p-5 md:p-8 space-y-4 md:space-y-6">  
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">NIK (Username Login)</label>
-                      <input required type="text" className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={newUser.nik} onChange={e => setNewUser({...newUser, nik: e.target.value})}/>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Nama Lengkap</label>
-                      <input required type="text" className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})}/>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 md:gap-5">
-                      <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Role Akses</label>
-                        <select className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})}><option value="staff">Staff</option><option value="manager">Manager</option><option value="direksi">Direksi</option><option value="admin">Admin</option></select>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Divisi Utama</label>
-                        <select required className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={newUser.division} onChange={e => setNewUser({...newUser, division: e.target.value})}><option value="">-- Pilih Divisi --</option>{divisions.map(div => <option key={div} value={div}>{div}</option>)}</select>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Posisi Jabatan</label>
-                      <input required type="text" className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={editingUser?.position || ''} onChange={e => setEditingUser({...editingUser, position: e.target.value})}/>
-                    </div>
-
-                  </div>
-                  <div className="p-4 md:p-6 flex justify-end gap-2 md:gap-3 border-t border-slate-100 bg-slate-50 pb-10 shrink-0">
-                    <button type="button" onClick={() => setIsUserModalOpen(false)} className="px-4 py-2.5 md:px-5 md:py-2.5 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-xs md:text-sm">Batal</button>
-                    <button type="submit" className="px-4 py-2.5 md:px-5 md:py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl font-bold text-xs md:text-sm shadow-md">Simpan Pengguna</button>
-                  </div>
-                  <label className="flex items-center gap-3 p-4 mt-2 border-2 border-emerald-100 bg-emerald-50/50 hover:bg-emerald-50 rounded-xl cursor-pointer transition-colors mx-5 mb-5">
-                    <input type="checkbox" checked={newUser.cleaningAccess || false} onChange={(e) => setNewUser({...newUser, cleaningAccess: e.target.checked})} className="w-5 h-5 text-emerald-600 rounded border-emerald-300 focus:ring-emerald-500 mt-0.5 cursor-pointer"/>
-                    <div>
-                      <span className="text-xs md:text-sm font-black text-emerald-900 block">Beri Akses Fitur Laporan OB/Cleaning</span>
-                      <span className="text-[10px] md:text-[11px] font-medium text-emerald-600 block mt-0.5">Pengguna dapat mengirim laporan kebersihan cepat tanpa batas waktu/deadline.</span>
-                    </div>
-                  </label>
-                </form>
-              </Card>
-            </div>
-          )}
-
-          {/* === MODAL 4: EDIT PENGGUNA === */}
-          {isEditUserModalOpen && editingUser && (
-            <div className="fixed inset-0 bg-slate-900/70 z-[80] flex justify-center md:items-center md:p-4 print:hidden">
-              <Card className="w-full h-full md:h-auto md:max-w-xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-10 md:zoom-in duration-300 border-0 shadow-2xl md:rounded-2xl">
-                <div className="px-5 py-4 md:px-8 md:py-6 border-b border-blue-600 flex justify-between items-center bg-blue-600 text-white shrink-0">
-                  <div>
-                     <h3 className="font-black text-base md:text-xl tracking-tight">Edit Data Pengguna</h3>
-                     <p className="text-blue-200 text-[9px] md:text-[10px] font-medium mt-0.5">Ubah informasi divisi atau jabatan.</p>
-                  </div>
-                  <button type="button" onClick={() => setIsEditUserModalOpen(false)} className="bg-white/10 p-2 rounded-full hover:bg-white/20 transition-colors"><X className="w-4 h-4 md:w-5 md:h-5" /></button>
-                </div>
-                <form onSubmit={handleUpdateUser} className="flex flex-col flex-1 min-h-0">
-                  <div className="overflow-y-auto custom-scrollbar flex-1 bg-white p-5 md:p-8 space-y-4 md:space-y-6">
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Nama Lengkap</label>
-                      <input required type="text" className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={editingUser.name} onChange={e => setEditingUser({...editingUser, name: e.target.value})}/>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 md:gap-5">
-                      <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Role Akses</label>
-                        <select className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={editingUser.role} onChange={e => setEditingUser({...editingUser, role: e.target.value})}><option value="staff">Staff</option><option value="manager">Manager</option><option value="direksi">Direksi</option><option value="admin">Admin</option></select>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Divisi Utama</label>
-                        <select required className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={editingUser.division} onChange={e => setEditingUser({...editingUser, division: e.target.value})}>{divisions.map(div => <option key={div} value={div}>{div}</option>)}</select>
-                      </div>
-                    </div>
-
-                    {editingUser.role === 'manager' && (
-                      <label className="flex items-start gap-3 p-4 border-2 border-blue-100 bg-blue-50/50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
-                        <input 
-                          type="checkbox" 
-                          checked={editingUser.crossDivision || false} 
-                          onChange={(e) => setEditingUser({...editingUser, crossDivision: e.target.checked})}
-                          className="w-5 h-5 text-blue-600 rounded border-blue-300 focus:ring-blue-500 mt-0.5 cursor-pointer"
-                        />
-                        <div>
-                          <span className="text-xs md:text-sm font-black text-blue-900 block">Izin Pantau Semua Divisi</span>
-                          <span className="text-[10px] md:text-[11px] font-medium text-blue-600 block mt-0.5">Berikan akses ke manager ini untuk melihat seluruh staf di luar divisi utamanya.</span>
-                        </div>
-                      </label>
-                    )}
-
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Posisi Jabatan</label>
-                      <input required type="text" className="w-full px-3 py-2.5 md:px-4 md:py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-xs md:text-sm outline-none font-bold" value={editingUser.position} onChange={e => setEditingUser({...editingUser, position: e.target.value})}/>
-                    </div>
-
-                    <label className="flex items-start gap-3 p-4 mt-2 border-2 border-emerald-100 bg-emerald-50/50 hover:bg-emerald-50 rounded-xl cursor-pointer transition-colors">
-                      <input 
-                        type="checkbox" 
-                        checked={editingUser.cleaningAccess || false} 
-                        onChange={(e) => setEditingUser({...editingUser, cleaningAccess: e.target.checked})} 
-                        className="w-5 h-5 text-emerald-600 rounded border-emerald-300 focus:ring-emerald-500 mt-0.5 cursor-pointer"
-                      />
-                      <div>
-                        <span className="text-xs md:text-sm font-black text-emerald-900 block">Beri Akses Fitur Laporan OB/Cleaning</span>
-                        <span className="text-[10px] md:text-[11px] font-medium text-emerald-600 block mt-0.5">Pengguna dapat mengirim laporan kebersihan cepat tanpa batas waktu/deadline.</span>
-                      </div>
-                    </label>
-
-                  </div>
-                  <div className="p-4 md:p-6 flex justify-end gap-2 md:gap-3 border-t border-slate-100 bg-slate-50 pb-10 shrink-0">
-                    <button type="button" onClick={() => setIsEditUserModalOpen(false)} className="px-4 py-2.5 md:px-5 md:py-2.5 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-xs md:text-sm">Batal</button>
-                    <button type="submit" className="px-4 py-2.5 md:px-5 md:py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs md:text-sm shadow-md">Simpan Perubahan</button>
-                  </div>
-                </form>
-              </Card>
-            </div>
-          )}
-
-          {/* === MODAL 5: INPUT PENGGUNA MASSAL (TABEL) === */}
-          {isMassUserModalOpen && (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[80] flex justify-center items-center p-4 print:hidden">
-              <Card className="w-full h-[90vh] md:max-w-6xl flex flex-col overflow-hidden animate-in zoom-in duration-300 border-0 shadow-2xl rounded-2xl relative bg-slate-50"> 
-                
-                <div className="px-5 py-4 md:px-8 md:py-6 border-b border-emerald-500 flex justify-between items-center bg-emerald-600 text-white shrink-0">
-                  <div>
-                    <h3 className="font-black text-base md:text-xl tracking-tight">Input Pengguna Massal</h3>
-                    <p className="text-emerald-100 text-[10px] md:text-xs font-medium mt-0.5">Ketik data langsung di tabel bawah ini. Kosongkan baris yang tidak dipakai.</p>
-                  </div>
-                  <button type="button" onClick={() => setIsMassUserModalOpen(false)} className="bg-white/10 p-2 rounded-full hover:bg-white/20 transition-colors"><X className="w-4 h-4 md:w-5 md:h-5" /></button>
-                </div>
-                
-                <div className="overflow-auto custom-scrollbar flex-1 p-4 md:p-6 bg-white">
-                  <table className="w-full text-left border-collapse min-w-[800px]">
-                    <thead>
-                      <tr className="bg-slate-100 text-slate-500 text-[10px] md:text-xs uppercase tracking-widest font-black border-y border-slate-200">
-                        <th className="p-3 w-10 text-center">No</th>
-                        <th className="p-3 w-32">NIK *</th>
-                        <th className="p-3">Nama Lengkap *</th>
-                        <th className="p-3 w-32">Password</th>
-                        <th className="p-3 w-32">Role</th>
-                        <th className="p-3 w-40">Divisi</th>
-                        <th className="p-3 w-48">Jabatan</th>
-                        <th className="p-3 w-12 text-center">Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {massUsersData.map((row, index) => (
-                        <tr key={index} className="border-b border-slate-100 hover:bg-slate-50 focus-within:bg-blue-50/30">
-                          <td className="p-2 text-center font-bold text-slate-400 text-xs">{index + 1}</td>
-                          <td className="p-2"><input type="text" placeholder="NIK..." value={row.nik} onChange={(e) => handleMassChange(index, 'nik', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-bold focus:border-blue-500 outline-none" /></td>
-                          <td className="p-2"><input type="text" placeholder="Nama Lengkap..." value={row.name} onChange={(e) => handleMassChange(index, 'name', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-bold focus:border-blue-500 outline-none" /></td>
-                          <td className="p-2"><input type="text" placeholder="123456" value={row.password} onChange={(e) => handleMassChange(index, 'password', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-bold focus:border-blue-500 outline-none" title="Kosongkan jika ingin password default: 123456" /></td>
-                          <td className="p-2">
-                            <select value={row.role} onChange={(e) => handleMassChange(index, 'role', e.target.value)} className="w-full px-2 py-2 border border-slate-200 rounded-lg text-xs font-bold focus:border-blue-500 outline-none bg-white">
-                              <option value="staff">Staff</option><option value="manager">Manager</option><option value="direksi">Direksi</option><option value="admin">Admin</option>
-                            </select>
-                          </td>
-                          <td className="p-2">
-                            <select value={row.division} onChange={(e) => handleMassChange(index, 'division', e.target.value)} className="w-full px-2 py-2 border border-slate-200 rounded-lg text-xs font-bold focus:border-blue-500 outline-none bg-white">
-                              <option value="">-- Pilih --</option>
-                              {divisions.map(div => <option key={div} value={div}>{div}</option>)}
-                            </select>
-                          </td>
-                          <td className="p-2"><input type="text" placeholder="Posisi..." value={row.position} onChange={(e) => handleMassChange(index, 'position', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-bold focus:border-blue-500 outline-none" /></td>
-                          <td className="p-2 text-center">
-                            <button type="button" onClick={() => removeMassRow(index)} className="p-1.5 text-red-500 hover:bg-red-100 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  
-                  <button type="button" onClick={addMassRow} className="mt-4 flex items-center gap-2 text-blue-600 font-bold text-xs md:text-sm px-4 py-2 bg-blue-50 hover:bg-blue-100 rounded-xl transition-colors border border-blue-200 border-dashed w-full justify-center">
-                    <Plus className="w-4 h-4" /> Tambah Baris Kosong Baru
-                  </button>
-                </div>
-
-                <div className="p-4 md:p-6 flex justify-end gap-2 md:gap-3 border-t border-slate-200 bg-slate-100 shrink-0">
-                  <button type="button" onClick={() => setIsMassUserModalOpen(false)} className="px-4 py-2.5 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-xs md:text-sm">Batal</button>
-                  <button type="button" onClick={handleSaveMassTable} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs md:text-sm shadow-md flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4" /> Simpan Semua Data
-                  </button>
-                </div>
-              </Card>
-            </div>
-          )}
-
           {/* BOTTOM NAVIGATION MOBILE */}
           <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 shadow-[0_-10px_30px_rgba(0,0,0,0.06)] z-[60] print:hidden">
             <div className="flex justify-between items-center h-[72px] pb-safe px-4">
@@ -2831,9 +2474,9 @@ export default function TaskManagement() {
               
               <div className="relative -top-5 flex justify-center w-16 shrink-0">
                  <button type="button" 
-                   onClick={() => { if(activeTab === 'admin_users') setIsUserModalOpen(true); else setIsModalOpen(true); }} 
+                   onClick={() => setIsModalOpen(true)} 
                    className="bg-blue-600 text-white w-14 h-14 rounded-full flex items-center justify-center shadow-[0_8px_20px_rgba(79,70,229,0.35)] border-4 border-slate-50 transform transition-transform hover:scale-105 active:scale-95">
-                   {activeTab === 'admin_users' ? <UserPlus className="w-6 h-6" /> : <Plus className="w-7 h-7" strokeWidth={3} />}
+                   <Plus className="w-7 h-7" strokeWidth={3} />
                  </button>
               </div>
 

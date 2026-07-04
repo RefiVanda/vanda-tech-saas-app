@@ -14,6 +14,7 @@ const PortalHome = () => {
   const [activeSettingsTab, setActiveSettingsTab] = useState('profile');
   const [allUsers, setAllUsers] = useState([]);
   const [search, setSearch] = useState('');
+  const [divisions, setDivisions] = useState([]);
   
   // State untuk Banner
   const [banners, setBanners] = useState([]);
@@ -150,7 +151,7 @@ const PortalHome = () => {
   };
 
   const refreshUserData = async () => {
-    const session = JSON.parse(localStorage.getItem('syntegra_user_session'));
+    const session = JSON.parse(localStorage.getItem('vest_user_session'));
     if (!session?.id) return;
 
     // 1. Ambil data profil user yang sedang login saat ini
@@ -162,7 +163,7 @@ const PortalHome = () => {
 
     if (!error && data) {
       setUser(data);
-      localStorage.setItem('syntegra_user_session', JSON.stringify(data));
+      localStorage.setItem('vest_user_session', JSON.stringify(data));
       
       // 2. TARIK DATA GAJI SAJA (TANPA JOIN RELASI SUPABASE AGAR TIDAK ERROR)
       const { data: payslipData, error: payslipError } = await supabase
@@ -217,9 +218,20 @@ const PortalHome = () => {
     refreshUserData();
     fetchAnnouncements();
 
-    const session = JSON.parse(localStorage.getItem('syntegra_user_session'));
+    const session = JSON.parse(localStorage.getItem('vest_user_session'));
 
-    if (session?.role === 'admin') fetchUsers();
+    if (session?.role === 'admin') {
+      fetchUsers();
+      const fetchDivisions = async () => {
+        const { data } = await supabase.from('initial_divisions').select('*');
+        if (data) {
+          const defaultDivs = ['Pusat', 'Direksi'];
+          const dbDivs = data.map(d => d.name);
+          setDivisions([...new Set([...defaultDivs, ...dbDivs])]);
+        }
+      };
+      fetchDivisions();
+    }
 
     const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
     setCurrentDate(new Date().toLocaleDateString('id-ID', dateOptions));
@@ -257,7 +269,7 @@ const PortalHome = () => {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('syntegra_user_session');
+    localStorage.removeItem('vest_user_session');
     localStorage.removeItem('isAuthenticated');
     window.location.href = '/login';
   };
@@ -345,7 +357,7 @@ const PortalHome = () => {
       setPasswordSuccess('Password Akun Anda berhasil diperbarui!');
       
       const updatedSession = { ...user, password: newPassword };
-      localStorage.setItem('syntegra_user_session', JSON.stringify(updatedSession));
+      localStorage.setItem('vest_user_session', JSON.stringify(updatedSession));
       setUser(updatedSession);
       
       setCurrentPassword('');
@@ -373,7 +385,7 @@ const PortalHome = () => {
               <img src="/Logo_apps.png" alt="Logo" className="w-6 h-6 object-contain" />
             </div>
             <h1 className="text-xl font-black tracking-tight text-slate-900 hidden md:block">
-              SYNTEGRA ERP SYSTEM <span className="text-yellow-600/60">( S . E . S )</span>
+              VANDA ERP SYSTEM TECH <span className="text-yellow-600/60">( V . E . S . T )</span>
             </h1>
           </div>
           
@@ -400,7 +412,7 @@ const PortalHome = () => {
                   <Calendar size={14} /> {currentDate}
                 </div>
                 <h2 className="text-2xl md:text-4xl font-black mb-1">Selamat Datang, <span className="text-yellow-400">{user.name}</span></h2>
-                <p className="text-slate-400 text-xs md:text-sm">Portal Hub ERP SYNTEGRA System</p>
+                <p className="text-slate-400 text-xs md:text-sm">Portal Hub ERP V.E.S.T System</p>
               </div>
 
               <div className="bg-white/10 backdrop-blur-md border border-white/20 p-4 rounded-2xl w-full md:w-auto min-w-[280px]">
@@ -567,9 +579,9 @@ const PortalHome = () => {
               <button onClick={() => setActiveSettingsTab('profile')} className={`py-3 px-4 text-xs font-black tracking-wider uppercase border-b-2 transition-all ${activeSettingsTab === 'profile' ? 'border-slate-950 text-slate-950' : 'border-transparent text-slate-400'}`}>
                 Keamanan Akun (Password)
               </button>
-              {(user?.role === 'admin' || user?.can_manage_hrd_users === true) && (
+              {user?.role === 'admin' && (
                 <button onClick={() => setActiveSettingsTab('access')} className={`py-3 px-4 text-xs font-black tracking-wider uppercase border-b-2 transition-all ${activeSettingsTab === 'access' ? 'border-slate-950 text-slate-950' : 'border-transparent text-slate-400'}`}>
-                  Kelola Akses HRD
+                  Manajemen Pengguna & Akses
                 </button>
               )}
             </div>
@@ -598,7 +610,7 @@ const PortalHome = () => {
                 </form>
               )}
 
-              {activeSettingsTab === 'access' && (user?.role === 'admin' || user?.can_manage_hrd_users === true) && (
+              {activeSettingsTab === 'access' && user?.role === 'admin' && (
                 <div className="space-y-4">
                   <div className="relative mb-4">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16}/>
@@ -607,10 +619,19 @@ const PortalHome = () => {
                   <div className="space-y-2">
                     {allUsers.filter(u => u.name.toLowerCase().includes(search.toLowerCase())).map(u => (
                       <div key={u.id} className="flex flex-col p-4 bg-slate-50 hover:bg-slate-100/70 rounded-2xl border border-slate-200 transition-all gap-3">
-                        <div className="flex sm:items-center justify-between">
+                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                             <div>
-                              <p className="font-black text-xs md:text-sm text-slate-900">{u.name}</p>
-                              <p className="text-[9px] font-black text-slate-500 uppercase tracking-wider">{u.role} • {u.division || 'Umum'} • NIK: {u.nik || '-'}</p>
+                              <p className="font-black text-sm md:text-base text-slate-900">{u.name}</p>
+                              <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider">NIK: {u.nik || '-'} • JABATAN: {u.position || '-'}</p>
+                            </div>
+                            <div className="flex gap-2 w-full sm:w-auto">
+                              <select value={u.role} onChange={(e) => updatePermission(u.id, 'role', e.target.value)} className="bg-white border border-slate-200 text-xs font-bold rounded-lg px-2 py-1.5 outline-none focus:border-blue-500 shadow-sm cursor-pointer">
+                                <option value="staff">Staff</option><option value="manager">Manager</option><option value="direksi">Direksi</option><option value="admin">Admin</option>
+                              </select>
+                              <select value={u.division} onChange={(e) => updatePermission(u.id, 'division', e.target.value)} className="bg-white border border-slate-200 text-xs font-bold rounded-lg px-2 py-1.5 outline-none focus:border-blue-500 shadow-sm cursor-pointer">
+                                <option value="">- Divisi -</option>
+                                {divisions.map(div => <option key={div} value={div}>{div}</option>)}
+                              </select>
                             </div>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2">
@@ -696,6 +717,40 @@ const PortalHome = () => {
                                 <input type="checkbox" checked={u.can_access_finance_settings || false} onChange={(e) => updatePermission(u.id, 'can_access_finance_settings', e.target.checked)} className="w-3.5 h-3.5 text-blue-600 focus:ring-blue-500 rounded border-slate-300"/>
                                 <span className="text-[10px] font-bold text-slate-700">Menu Setting</span>
                               </label>
+
+                              {/* --- BLOK AKSES TASK & OPERASIONAL --- */}
+                              <div className="col-span-2 md:col-span-3 h-px bg-slate-200 my-1"></div>
+                              <div className="col-span-2 md:col-span-3 text-[9px] font-black text-slate-400 uppercase tracking-widest">Akses Operasional & Task Management</div>
+
+                              <label className="flex items-center gap-2 cursor-pointer bg-white px-2 py-1.5 rounded-lg border border-emerald-200">
+                                <input type="checkbox" checked={u.cleaningAccess || false} onChange={(e) => updatePermission(u.id, 'cleaningAccess', e.target.checked)} className="w-3.5 h-3.5 text-emerald-600 focus:ring-emerald-500 rounded border-slate-300"/>
+                                <span className="text-[10px] font-bold text-slate-700">Laporan OB/Cleaning</span>
+                              </label>
+                              
+                              {(u.role === 'manager' || u.role === 'direksi') && (
+                                <label className="flex items-center gap-2 cursor-pointer bg-white px-2 py-1.5 rounded-lg border border-purple-200">
+                                  <input type="checkbox" checked={u.crossDivision || false} onChange={(e) => updatePermission(u.id, 'crossDivision', e.target.checked)} className="w-3.5 h-3.5 text-purple-600 focus:ring-purple-500 rounded border-slate-300"/>
+                                  <span className="text-[10px] font-bold text-slate-700">Pantau Lintas Divisi (All)</span>
+                                </label>
+                              )}
+                              
+                              {u.role === 'direksi' && !u.crossDivision && (
+                                <div className="col-span-2 md:col-span-3 bg-purple-50 border border-purple-100 p-2 rounded-lg mt-1">
+                                   <span className="text-[9px] font-bold text-purple-800 block mb-1">Pilih Divisi Spesifik yang Bisa Dipantau oleh Direksi:</span>
+                                   <div className="flex flex-wrap gap-2">
+                                     {divisions.map(div => (
+                                       <label key={div} className="flex items-center gap-1.5 cursor-pointer">
+                                          <input type="checkbox" checked={(u.accessible_divisions || []).includes(div)} onChange={(e) => {
+                                            const current = u.accessible_divisions || [];
+                                            const updated = e.target.checked ? [...current, div] : current.filter(d => d !== div);
+                                            updatePermission(u.id, 'accessible_divisions', updated);
+                                          }} className="w-3 h-3 text-purple-600 rounded border-slate-300"/>
+                                          <span className="text-[9px] font-bold text-slate-700">{div}</span>
+                                       </label>
+                                     ))}
+                                   </div>
+                                </div>
+                              )}
                         </div>
                       </div>
                     ))}

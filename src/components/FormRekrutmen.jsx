@@ -7,18 +7,18 @@ const FormRekrutmen = () => {
   const navigate = useNavigate();
   
   const [formData, setFormData] = useState({
-    bidang_jasa: 'Security (Satpam)', posisi_jabatan: '', alamat_domisili: '', nama_lengkap: '', nik_ktp: '', kewarganegaraan: 'WNI', jenis_kelamin: 'Laki-laki', 
-    tempat_lahir: '', tanggal_lahir: '', agama: 'Islam', status_pernikahan: 'TK/0', golongan_darah: '-', no_hp: '', alamat_lengkap: '',
+    bidang_jasa: '', posisi_jabatan: '', alamat_domisili: '', nama_lengkap: '', nik_ktp: '', kewarganegaraan: '', jenis_kelamin: '', 
+    tempat_lahir: '', tanggal_lahir: '', agama: '', status_pernikahan: '', golongan_darah: '-', no_hp: '', alamat_lengkap: '',
     nama_pasangan: '', pasangan_ttl: '', pasangan_pekerjaan: '', detail_anak: '',
     kontak_darurat_nama: '', kontak_darurat_hub: '', kontak_darurat_telp: '',
-    tinggi_badan: '', berat_badan: '', ukuran_baju: 'M', ukuran_celana: '', ukuran_sepatu: '',
+    tinggi_badan: '', berat_badan: '', ukuran_baju: '', ukuran_celana: '', ukuran_sepatu: '',
     bertato: 'Tidak', berkacamata: 'Tidak', riwayat_operasi: 'Tidak', detail_operasi: '',
     patah_tulang: 'Tidak', sakit_serius: 'Tidak', detail_sakit: '',
     bahasa_indonesia: 'Baik', bahasa_inggris: 'Cukup',
     riwayat_kerja: '', gaji_terakhir: '', alasan_keluar: '', gaji_diharapkan: '', 
     bisa_berenang: 'Tidak', bisa_beladiri: 'Tidak', detail_beladiri: '',
     takut_tinggi: 'Tidak', detail_takut_tinggi: '', keterampilan_lain: '',
-    info_lowongan: 'Iklan', kenalan_syntegra: 'Tidak', detail_kenalan: ''
+    info_lowongan: 'Iklan', kenalan_internal: 'Tidak', detail_kenalan: ''
   });
 
   const [pendidikanList, setPendidikanList] = useState([{ tingkat: 'SMA/SMK', institusi: '', jurusan: '', tahun_lulus: '', kota: '' }]);
@@ -43,7 +43,7 @@ const FormRekrutmen = () => {
         }
       }
 
-      const defaultDivisions = ["Security (Satpam)", "Cleaning Service", "Parking Service", "Labour Supply (Tenaga Kerja)"];
+      const defaultDivisions = [];
       let uniqueDivisions = defaultDivisions;
 
       if (!usersRes.error && usersRes.data) {
@@ -414,8 +414,8 @@ const FormRekrutmen = () => {
                  </div>
                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                    <label className={labelClass}>Ada Kenalan Internal Perusahaan?</label>
-                   <select name="kenalan_syntegra" onChange={handleInputChange} className={`${inputClass} mb-3 font-bold`}><option value="Tidak">Tidak Ada</option><option value="Ya">Ya, Ada</option></select>
-                   {formData.kenalan_syntegra === 'Ya' && (
+                   <select name="kenalan_internal" onChange={handleInputChange} className={`${inputClass} mb-3 font-bold`}><option value="Tidak">Tidak Ada</option><option value="Ya">Ya, Ada</option></select>
+                   {formData.kenalan_internal === 'Ya' && (
                      <input type="text" name="detail_kenalan" placeholder="Sebutkan Nama & Jabatan kenalan Anda" onChange={handleInputChange} className={inputClass} />
                    )}
                  </div>

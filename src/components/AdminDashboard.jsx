@@ -57,12 +57,12 @@ const AdminDashboard = ({ setAuth }) => {
 
   const [user, setUser] = useState(
     JSON.parse(
-      localStorage.getItem('syntegra_user_session')
+      localStorage.getItem('vest_user_session')
     )
   );
 
   useEffect(() => {
-    const session = JSON.parse(localStorage.getItem('syntegra_user_session'));
+    const session = JSON.parse(localStorage.getItem('vest_user_session'));
     if (!session) { navigate('/'); return; }
     if (!session.has_portal_access) { alert('Anda tidak memiliki akses ke modul HRD'); navigate('/'); return; }
     fetchData();
@@ -455,7 +455,7 @@ const AdminDashboard = ({ setAuth }) => {
             kategori_karyawan: 'Internal', lokasi_penempatan: 'Kantor Pusat (HO)', status_kontrak: 'Probation', tanggal_bergabung: new Date().toISOString().split('T')[0],
             nik_ktp: u.nik || '0000000000000000', no_hp: '000000000000', kewarganegaraan: 'WNI', jenis_kelamin: 'Laki-laki', tempat_lahir: '-', tanggal_lahir: new Date().toISOString().split('T')[0], agama: 'Islam', status_pernikahan: 'TK/0', golongan_darah: '-',
             alamat_lengkap: '-', tinggi_badan: 0, berat_badan: 0, ukuran_baju: 'M', ukuran_celana: '0', ukuran_sepatu: '0', bertato: 'Tidak', berkacamata: 'Tidak', patah_tulang: 'Tidak', riwayat_operasi: 'Tidak', sakit_serius: 'Tidak',
-            bahasa_indonesia: 'Baik', bahasa_inggris: 'Cukup', bisa_berenang: 'Tidak', bisa_beladiri: 'Tidak', takut_tinggi: 'Tidak', info_lowongan: 'Internal', kenalan_syntegra: 'Tidak'
+            bahasa_indonesia: 'Baik', bahasa_inggris: 'Cukup', bisa_berenang: 'Tidak', bisa_beladiri: 'Tidak', takut_tinggi: 'Tidak', info_lowongan: 'Internal', kenalan_vest: 'Tidak'
           };
           const { error } = await supabase.from('candidates').insert([payload]);
           if (error) failCount++; else newInserts++;
@@ -616,7 +616,7 @@ const AdminDashboard = ({ setAuth }) => {
             detail_beladiri: row['Detail Beladiri'] || '',
             keterampilan_lain: row['Keahlian Lainnya'] || '',
             info_lowongan: row['Info Loker Dari?'] || 'Internal',
-            kenalan_syntegra: row['Kenalan PT?'] || 'Tidak',
+            kenalan_vest: row['Kenalan PT?'] || 'Tidak',
             detail_kenalan: row['Siapa Namanya?'] || '',
             status: 'INTI' 
           };
@@ -724,7 +724,7 @@ const AdminDashboard = ({ setAuth }) => {
            <div className="flex items-center gap-3">
              <div className="w-8 h-8 bg-amber-500 rounded-lg flex items-center justify-center font-black text-slate-950">S</div>
              <div>
-                <h1 className="font-black text-white leading-tight">Syntegra<span className="text-amber-500">Hub</span></h1>
+                <h1 className="font-black text-white leading-tight">vest<span className="text-amber-500">Hub</span></h1>
                 <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">HRIS System</p>
              </div>
            </div>
@@ -866,7 +866,7 @@ const AdminDashboard = ({ setAuth }) => {
                       <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 px-1">Kategori Karyawan Default</label>
                       <select value={newSiteData.kategori_karyawan} onChange={e => setNewSiteData({...newSiteData, kategori_karyawan: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-amber-500 font-bold text-slate-700">
                          <option value="Pekerja Site">Pekerja Site / Client</option>
-                         <option value="Internal HO">Internal Syntegra (HO)</option>
+                         <option value="Internal HO">Internal vest (HO)</option>
                       </select>
                     </div>
                     <button type="submit" className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition h-[42px]">Simpan Site</button>
@@ -1351,7 +1351,7 @@ const AdminDashboard = ({ setAuth }) => {
 
                         <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 px-1">Info Loker Dari?</label><select value={editProfileData.info_lowongan || ''} onChange={e => setEditProfileData({...editProfileData, info_lowongan: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-blue-500"><option value="Iklan">Iklan / Media Sosial</option><option value="Teman">Teman</option><option value="Keluarga">Keluarga</option><option value="Teman Kerja">Teman Kerja</option></select></div>
                         <div className="grid grid-cols-3 gap-2">
-                           <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 px-1">Kenalan PT?</label><select value={editProfileData.kenalan_syntegra || ''} onChange={e => setEditProfileData({...editProfileData, kenalan_syntegra: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-blue-500"><option value="Tidak">Tidak</option><option value="Ya">Ya</option></select></div>
+                           <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 px-1">Kenalan PT?</label><select value={editProfileData.kenalan_vest || ''} onChange={e => setEditProfileData({...editProfileData, kenalan_vest: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-blue-500"><option value="Tidak">Tidak</option><option value="Ya">Ya</option></select></div>
                            <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 px-1">Siapa Namanya?</label><input type="text" value={editProfileData.detail_kenalan || ''} onChange={e => setEditProfileData({...editProfileData, detail_kenalan: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-blue-500" /></div>
                         </div>
                      </div>

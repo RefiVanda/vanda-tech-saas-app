@@ -10,18 +10,18 @@ export default function Login() {
   const [loginError, setLoginError] = useState('');
   
   // Konfigurasi sistem statis (agar logo/nama tampil di login)
-  const sysConfig = { brandName: 'SYNTEGRA SERVICES' };
+  const sysConfig = { brandName: 'V.E.S.T SERVICES' };
 
   useEffect(() => {
     // Cek apakah sudah login, jika sudah langsung lempar ke halaman Portal
-    const activeSession = localStorage.getItem('syntegra_user_session');
+    const activeSession = localStorage.getItem('vest_user_session');
     if (activeSession) {
       navigate('/');
     }
 
     // Cek Remember Me
-    const savedNik = localStorage.getItem('syntegra_saved_nik');
-    const savedPassword = localStorage.getItem('syntegra_saved_password');
+    const savedNik = localStorage.getItem('vest_saved_nik');
+    const savedPassword = localStorage.getItem('vest_saved_password');
     if (savedNik && savedPassword) {
       setLoginNik(savedNik);
       setLoginPassword(savedPassword);
@@ -51,16 +51,16 @@ export default function Login() {
       }
 
       // Jika berhasil, Simpan Sesi
-      localStorage.setItem('syntegra_user_session', JSON.stringify(user));
+      localStorage.setItem('vest_user_session', JSON.stringify(user));
       localStorage.setItem('isAuthenticated', 'true');
       
       // Simpan Remember Me
       if (rememberMe) {
-        localStorage.setItem('syntegra_saved_nik', loginNik);
-        localStorage.setItem('syntegra_saved_password', loginPassword);
+        localStorage.setItem('vest_saved_nik', loginNik);
+        localStorage.setItem('vest_saved_password', loginPassword);
       } else {
-        localStorage.removeItem('syntegra_saved_nik');
-        localStorage.removeItem('syntegra_saved_password');
+        localStorage.removeItem('vest_saved_nik');
+        localStorage.removeItem('vest_saved_password');
       }
       
       // Arahkan ke halaman portal utama
@@ -80,7 +80,7 @@ export default function Login() {
           <div className="bg-gradient-to-br from-yellow-500 to-yellow-400 w-16 h-16 md:w-20 md:h-20 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-xl transform hover:rotate-3 transition-transform">
             <img src="/Logo_apps.png" alt="Logo" />
           </div>
-          <h1 className="text-2xl md:text-3xl font-black text-yellow-500 tracking-tight uppercase">{sysConfig.brandName}<br/><span className="text-slate-800 text-lg md:text-xl">SYNTEGRA ERP SYSTEM</span></h1>
+          <h1 className="text-2xl md:text-3xl font-black text-yellow-500 tracking-tight uppercase">{sysConfig.brandName}<br/><span className="text-slate-800 text-lg md:text-xl">V.E.S.T ERP SYSTEM</span></h1>
           <p className="text-slate-500 text-xs md:text-sm font-medium mt-1">Sistem ERP Terintegrasi</p>
         </div>
         

@@ -13,12 +13,12 @@ import FinanceDashboard from './components/FinanceDashboard';
 
 // Komponen Proteksi Rute Umum
 const ProtectedRoute = ({ children }) => {
-  const session = localStorage.getItem('syntegra_user_session');
+  const session = localStorage.getItem('vest_user_session');
   return session ? children : <Navigate to="/login" replace />;
 };
 
 const RecruitmentRoute = ({ children }) => {
-  const sessionData = localStorage.getItem('syntegra_user_session');
+  const sessionData = localStorage.getItem('vest_user_session');
 
   if (!sessionData) {
     return <Navigate to="/login" replace />;
@@ -42,7 +42,7 @@ const RecruitmentRoute = ({ children }) => {
 };
 
 const FinanceRoute = ({ children }) => {
-  const sessionData = localStorage.getItem('syntegra_user_session');
+  const sessionData = localStorage.getItem('vest_user_session');
   if (!sessionData) return <Navigate to="/login" replace />;
   const user = JSON.parse(sessionData);
   const canAccess = user.can_access_finance === true || user.role === 'admin' || user.role === 'direksi';
@@ -50,7 +50,7 @@ const FinanceRoute = ({ children }) => {
 };
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('syntegra_user_session'));
+  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('vest_user_session'));
 
   return (
     <Router>
