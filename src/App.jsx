@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import SuperAdmin from './pages/SuperAdmin';
 import ClientAdmin from './pages/ClientAdmin';
 import MobileApp from './pages/MobileApp';
+import FormRekrutmen from './pages/FormRekrutmen';
 
 export default function App() {
   return (
@@ -20,6 +21,10 @@ export default function App() {
         <Route path="/superadmin" element={<SuperAdmin />} />
         <Route path="/client" element={<ClientAdmin />} />
         <Route path="/mobile" element={<MobileApp />} />
+
+        {/* Rute ke form recruitment */}
+        <Route path="/recruitment" element={<FormRekrutmen />} />
+
       </Routes>
     </BrowserRouter>
   );

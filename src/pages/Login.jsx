@@ -1,10 +1,15 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { supabase } from '../supabase'; // Sesuaikan path ini dengan letak file supabase.js kamu
 import { Building2, KeyRound, Eye, EyeOff, IdCard, LogIn } from 'lucide-react';
 
 export default function Login() {
+  const navigate = useNavigate();
   const [nik, setNik] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   // Simulasi data klien (Diatur dari Super Admin)
   const clientData = {
@@ -14,10 +19,48 @@ export default function Login() {
     ringFocus: "focus:ring-blue-600"
   };
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    console.log("Login Attempt:", { nik, password });
-    // Logika fetch API login di sini
+    setErrorMsg('');
+    setIsLoading(true);
+
+    try {
+      // Pastikan memanggil tabel 'candidates' dan variabel 'nik' & 'password' yang benar
+      const { data, error } = await supabase
+        .from('employees') // Ganti dengan nama tabel yang sesuai di Supabase
+        .select('*')
+        .eq('nik_karyawan', nik) 
+        .eq('password', password)
+        .single();
+
+      if (error || !data) {
+        setErrorMsg('NIK atau Kata Sandi salah atau tidak terdaftar!');
+      } else {
+        // Jika cocok, buat data sesi (Session) dan simpan ke Local Storage
+        const userSession = {
+          id: data.id,
+          nik: data.nik_karyawan,
+          name: data.nama_lengkap,
+          role: data.role || 'staff',
+          division: data.bidang_jasa,
+          position: data.posisi_jabatan,
+          hasMobileAccess: data.has_mobile_access,
+          hasTaskAccess: data.has_task_access
+        };
+        localStorage.setItem('syntegra_user_session', JSON.stringify(userSession));
+        
+        // Arahkan user ke halaman yang tepat berdasarkan role
+        if (data.role === 'admin' || data.role === 'manager') {
+          navigate('/admin'); // Arahkan ke Client Admin
+        } else {
+          navigate('/mobile'); // Arahkan ke Mobile App untuk staff
+        }
+      }
+    } catch (err) {
+      setErrorMsg('Gagal terhubung ke database.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -84,7 +127,7 @@ export default function Login() {
                     <IdCard size={20} />
                   </div>
                   <input
-                    type="number"
+                    type="text"
                     value={nik}
                     onChange={(e) => setNik(e.target.value)}
                     className={`w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-slate-800 text-sm focus:outline-none focus:ring-2 focus:bg-white transition-all ${clientData.ringFocus} focus:border-transparent`}
@@ -118,6 +161,12 @@ export default function Login() {
                 </div>
               </div>
 
+              {errorMsg && (
+                <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-bold border border-red-100 text-center animate-pulse">
+                  {errorMsg}
+                </div>
+              )}
+
               <div className="pt-2 space-y-6">
                 <div className="flex justify-end">
                   <button type="button" className="text-sm font-semibold text-blue-600 hover:text-blue-700">
@@ -127,9 +176,10 @@ export default function Login() {
 
                 <button
                   type="submit"
-                  className={`w-full flex justify-center items-center gap-2 ${clientData.brandColor} ${clientData.buttonHover} text-white font-bold py-3.5 rounded-2xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]`}
+                  disabled={isLoading}
+                  className={`w-full flex justify-center items-center gap-2 ${clientData.brandColor} ${clientData.buttonHover} text-white font-bold py-3.5 rounded-2xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98] ${isLoading ? 'opacity-70 cursor-not-allowed' : ''}`}
                 >
-                  Masuk <LogIn size={18} />
+                  {isLoading ? 'Memverifikasi Data...' : <>Masuk <LogIn size={18} /></>}
                 </button>
               </div>
 

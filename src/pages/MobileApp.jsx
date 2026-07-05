@@ -1,20 +1,110 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { supabase } from '../supabase';
 import { 
   Home, MapPin, Camera, FileText, User, 
   Clock, ClipboardList, ShieldAlert, CreditCard, 
-  ChevronRight, Calendar, AlertCircle, FileSpreadsheet
+  ChevronRight, Calendar, AlertCircle, FileSpreadsheet, LogOut
 } from 'lucide-react';
 
 export default function MobileApp() {
+  const navigate = useNavigate();
   const [activeMenu, setActiveMenu] = useState('home');
   const [laporanTab, setLaporanTab] = useState('reguler');
+  
+  // State Aksi & Form
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasAbsen, setHasAbsen] = useState(false);
+  const [absenTime, setAbsenTime] = useState('--:--');
+  const [reportTitle, setReportTitle] = useState('');
+  const [reportDesc, setReportDesc] = useState('');
 
-  // Dummy State Data Karyawan
-  const employeeData = {
-    name: "Ahmad Teknisi",
-    role: "Karyawan Lapangan (Site)",
-    branch: "PT Klien Nusantara",
-    avatar: "AT"
+  // State User dari Database
+  const [currentUser, setCurrentUser] = useState({ id: '', name: 'Loading...', role: '', division: '', position: '', avatar: '' });
+
+  useEffect(() => {
+    // 1. Verifikasi Sesi Login
+    const session = localStorage.getItem('syntegra_user_session');
+    if (!session) {
+      navigate('/');
+      return;
+    }
+    const parsed = JSON.parse(session);
+    const initials = parsed.name.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
+    setCurrentUser({ ...parsed, avatar: initials });
+
+    // 2. Cek apakah karyawan sudah absen hari ini
+    checkTodayAttendance(parsed.id);
+  }, []);
+
+  const checkTodayAttendance = async (userId) => {
+    // Format Waktu WIB
+    const d = new Date();
+    const today = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+    
+    const { data } = await supabase
+      .from('attendances')
+      .select('*')
+      .eq('employee_id', userId)
+      .eq('date', today)
+      .single();
+      
+    if (data) {
+      setHasAbsen(true);
+      setAbsenTime(data.check_in_time.substring(0, 5));
+    }
+  };
+
+  const handleAbsenMasuk = async () => {
+    setIsSubmitting(true);
+    const d = new Date();
+    const timeString = d.toTimeString().split(' ')[0]; // HH:MM:SS
+    const dateString = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+
+    const { error } = await supabase.from('attendances').insert([{
+      employee_id: currentUser.id,
+      date: dateString,
+      check_in_time: timeString,
+      location_gps: 'Head Office (Sektor 7)', 
+      status: 'HADIR'
+    }]);
+
+    setIsSubmitting(false);
+    if (!error) {
+      setHasAbsen(true);
+      setAbsenTime(timeString.substring(0, 5));
+      alert("Absen Masuk Berhasil Tersimpan di Database!");
+      setActiveMenu('home');
+    } else {
+      alert("Gagal absen: " + error.message);
+    }
+  };
+
+  const handleKirimLaporan = async () => {
+    if (!reportTitle || !reportDesc) return alert("Judul dan keterangan wajib diisi!");
+    setIsSubmitting(true);
+
+    const { error } = await supabase.from('field_reports').insert([{
+      employee_id: currentUser.id,
+      report_type: laporanTab.toUpperCase(),
+      title: reportTitle,
+      description: reportDesc
+    }]);
+
+    setIsSubmitting(false);
+    if (!error) {
+      alert("Laporan berhasil dikirim ke server Supabase!");
+      setReportTitle('');
+      setReportDesc('');
+      setActiveMenu('home');
+    } else {
+      alert("Gagal mengirim laporan: " + error.message);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('syntegra_user_session');
+    navigate('/');
   };
 
   return (
@@ -31,16 +121,16 @@ export default function MobileApp() {
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center font-bold border border-white/30 backdrop-blur-sm">
-                {employeeData.avatar}
+                {currentUser.avatar}
               </div>
               <div>
-                <h1 className="font-bold text-sm leading-tight">{employeeData.name}</h1>
-                <p className="text-[10px] text-blue-100">{employeeData.role}</p>
+                <h1 className="font-bold text-sm leading-tight">{currentUser.name}</h1>
+                <p className="text-[10px] text-blue-100 capitalize">{currentUser.role} • {currentUser.division}</p>
               </div>
             </div>
             <div className="text-right">
-              <span className="text-[10px] bg-white/20 px-2 py-1 rounded-full border border-white/30 font-medium">
-                {employeeData.branch}
+              <span className="text-[10px] bg-white/20 px-2 py-1 rounded-full border border-white/30 font-medium text-center block">
+                {currentUser.position || 'Staff'}
               </span>
             </div>
           </div>
@@ -91,7 +181,7 @@ export default function MobileApp() {
                 <div className="flex justify-between items-center">
                   <div>
                     <p className="text-[10px] text-slate-400">Jam Masuk</p>
-                    <p className="font-bold text-lg text-emerald-400">07:15</p>
+                    <p className="font-bold text-lg text-emerald-400">{hasAbsen ? absenTime : '--:--'}</p>
                   </div>
                   <div className="h-8 w-px bg-slate-600"></div>
                   <div>
@@ -131,8 +221,12 @@ export default function MobileApp() {
                       <p className="text-[10px] text-slate-500">Jl. Pahlawan No. 12, Sektor 7</p>
                     </div>
                   </div>
-                  <button className="w-full bg-blue-600 active:bg-blue-700 text-white font-bold py-3.5 rounded-xl text-sm transition-colors shadow-lg shadow-blue-600/30">
-                    Absen Masuk Sekarang
+                  <button 
+                    onClick={handleAbsenMasuk}
+                    disabled={isSubmitting || hasAbsen}
+                    className={`w-full text-white font-bold py-3.5 rounded-xl text-sm transition-colors shadow-lg ${hasAbsen ? 'bg-emerald-500 shadow-emerald-500/30' : 'bg-blue-600 active:bg-blue-700 shadow-blue-600/30'} ${isSubmitting ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  >
+                    {isSubmitting ? 'Menyimpan ke Database...' : hasAbsen ? 'Sudah Absen Hari Ini' : 'Absen Masuk Sekarang'}
                   </button>
                 </div>
               </div>
@@ -171,7 +265,7 @@ export default function MobileApp() {
 
                 <div>
                   <label className="text-xs font-bold text-slate-700 block mb-1">Judul Laporan</label>
-                  <input type="text" className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500" placeholder="Contoh: Lampu Koridor Mati" />
+                  <input type="text" value={reportTitle} onChange={(e) => setReportTitle(e.target.value)} className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500" placeholder="Contoh: Lampu Koridor Mati" />
                 </div>
                 
                 {laporanTab === 'patroli' && (
@@ -185,19 +279,25 @@ export default function MobileApp() {
 
                 <div>
                   <label className="text-xs font-bold text-slate-700 block mb-1">Keterangan / Temuan</label>
-                  <textarea rows="3" className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500" placeholder="Jelaskan detail temuan..."></textarea>
+                  <textarea rows="3" value={reportDesc} onChange={(e) => setReportDesc(e.target.value)} className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500" placeholder="Jelaskan detail temuan..."></textarea>
                 </div>
 
                 <div>
                   <label className="text-xs font-bold text-slate-700 block mb-1">Lampiran Foto</label>
                   <div className="flex gap-2">
-                    <button className="w-16 h-16 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-center text-slate-400">
+                    <button className="w-16 h-16 bg-slate-50 border border-slate-200 hover:bg-slate-100 rounded-xl flex items-center justify-center text-slate-400 transition-colors">
                       <Camera size={20}/>
                     </button>
                   </div>
                 </div>
 
-                <button className="w-full bg-slate-800 text-white font-bold py-3.5 rounded-xl text-sm mt-4">Kirim Laporan</button>
+                <button 
+                  onClick={handleKirimLaporan}
+                  disabled={isSubmitting}
+                  className="w-full bg-slate-800 hover:bg-slate-900 active:bg-black text-white font-bold py-3.5 rounded-xl text-sm mt-4 transition-colors disabled:opacity-70"
+                >
+                  {isSubmitting ? 'Menyimpan ke Database...' : 'Kirim Laporan'}
+                </button>
               </div>
             </div>
           )}
@@ -249,12 +349,15 @@ export default function MobileApp() {
             <div className="space-y-4 fade-in">
               <h2 className="font-bold text-slate-800 text-lg px-1">Profil & Keuangan</h2>
               
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 text-center">
-                <div className="w-20 h-20 bg-slate-100 rounded-full mx-auto flex items-center justify-center font-bold text-2xl text-slate-400 mb-3 border-4 border-white shadow-md">
-                  {employeeData.avatar}
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 text-center relative">
+                <button onClick={handleLogout} className="absolute top-4 right-4 p-2 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors">
+                  <LogOut size={16} />
+                </button>
+                <div className="w-20 h-20 bg-blue-100 rounded-full mx-auto flex items-center justify-center font-bold text-2xl text-blue-600 mb-3 border-4 border-white shadow-md">
+                  {currentUser.avatar}
                 </div>
-                <h3 className="font-bold text-slate-800">{employeeData.name}</h3>
-                <p className="text-xs text-slate-500">{employeeData.role}</p>
+                <h3 className="font-bold text-slate-800">{currentUser.name}</h3>
+                <p className="text-xs text-slate-500 capitalize">{currentUser.role} • {currentUser.division}</p>
                 <div className="mt-4 pt-4 border-t border-slate-100 flex justify-around text-center">
                   <div>
                     <p className="text-lg font-bold text-slate-700">12</p>
