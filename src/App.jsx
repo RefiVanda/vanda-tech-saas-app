@@ -19,7 +19,7 @@ export default function App() {
         
         {/* Rute ke 3 Modul Utama */}
         <Route path="/superadmin" element={<SuperAdmin />} />
-        <Route path="/client" element={<ClientAdmin />} />
+        <Route path="/admin" element={<ClientAdmin />} />
         <Route path="/mobile" element={<MobileApp />} />
 
         {/* Rute ke form recruitment */}

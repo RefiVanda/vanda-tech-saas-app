@@ -37,15 +37,17 @@ export default function Login() {
         setErrorMsg('NIK atau Kata Sandi salah atau tidak terdaftar!');
       } else {
         // Jika cocok, buat data sesi (Session) dan simpan ke Local Storage
+        // Jika cocok, buat data sesi (Session) dan simpan ke Local Storage
         const userSession = {
           id: data.id,
           nik: data.nik_karyawan,
-          name: data.nama_lengkap,
+          // Tambahkan fallback string kosong atau nama default agar tidak undefined
+          name: data.nama_lengkap || 'User VEST', 
           role: data.role || 'staff',
-          division: data.bidang_jasa,
-          position: data.posisi_jabatan,
-          hasMobileAccess: data.has_mobile_access,
-          hasTaskAccess: data.has_task_access
+          division: data.bidang_jasa || '-',
+          position: data.posisi_jabatan || '-',
+          hasMobileAccess: Boolean(data.has_mobile_access),
+          hasTaskAccess: Boolean(data.has_task_access)
         };
         localStorage.setItem('syntegra_user_session', JSON.stringify(userSession));
         

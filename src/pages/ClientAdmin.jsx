@@ -12,14 +12,18 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase'; // Pastikan nama file ini sesuai dengan yang kamu buat
 
 export default function ClientAdmin() {
-  const [activeMenu, setActiveMenu] = useState('finance'); // Saya set default ke finance agar kamu bisa langsung lihat
+  const [activeMenu, setActiveMenu] = useState('hris'); // Saya set default ke finance agar kamu bisa langsung lihat
   const [activeTaskLevel, setActiveTaskLevel] = useState('Level 1');
   
   // State Sub-Menu
-  const [hrisTab, setHrisTab] = useState('overview'); 
+  const [hrisTab, setHrisTab] = useState('absensi'); 
   const [financeTab, setFinanceTab] = useState('overview');
+  const [laporanTab, setLaporanTab] = useState('patroli');
+  const [settingTab, setSettingTab] = useState('user_access');
 
   const navigate = useNavigate();
+  const [isAccessModalOpen, setIsAccessModalOpen] = useState(false);
+  const [selectedEmployeeAccess, setSelectedEmployeeAccess] = useState(null);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(true);
   const [isProfilePopupOpen, setIsProfilePopupOpen] = useState(false);
   const popupRef = useRef(null);
@@ -28,9 +32,50 @@ export default function ClientAdmin() {
   const [currentUser, setCurrentUser] = useState({ id: '', name: 'Loading...', role: '', division: '', avatar: '' });
   const [candidates, setCandidates] = useState([]);
   const [cashflows, setCashflows] = useState([]);
+  
+  // State Absensi & CRUD
+  const [attendances, setAttendances] = useState([]);
+  const [filterNama, setFilterNama] = useState('');
+  const [filterLokasi, setFilterLokasi] = useState('');
+  const [filterTanggal, setFilterTanggal] = useState('');
+  const [isAbsenModalOpen, setIsAbsenModalOpen] = useState(false);
+  const [absenForm, setAbsenForm] = useState({ id: null, employee_id: '', date: '', check_in_time: '', check_out_time: '', location_gps: '', photo_url: '', status: 'HADIR' });
+
+  const handleSaveAbsen = async (e) => {
+    e.preventDefault();
+    const payload = { ...absenForm };
+    delete payload.id; // Hapus ID agar Supabase tidak error saat insert
+    if (absenForm.id) {
+      const { error } = await supabase.from('attendances').update(payload).eq('id', absenForm.id);
+      if (!error) { alert('Data absen diperbarui!'); fetchAllData(); setIsAbsenModalOpen(false); }
+      else alert('Gagal update: ' + error.message);
+    } else {
+      const { error } = await supabase.from('attendances').insert([payload]);
+      if (!error) { alert('Data absen ditambahkan!'); fetchAllData(); setIsAbsenModalOpen(false); }
+      else alert('Gagal menambah: ' + error.message);
+    }
+  };
+
+  const handleDeleteAbsen = async (id) => {
+    if (window.confirm("Hapus data absen ini permanen?")) {
+      const { error } = await supabase.from('attendances').delete().eq('id', id);
+      if (!error) fetchAllData();
+    }
+  };
+
+  const downloadTemplateAbsen = () => {
+    const csvContent = "data:text/csv;charset=utf-8,employee_id,date,check_in_time,check_out_time,location_gps,photo_url,status\nUID_KARYAWAN_DISINI,2026-07-06,08:00:00,17:00:00,Head Office,https://link-foto.com/foto.jpg,HADIR";
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "Template_Import_Absensi.csv");
+    document.body.appendChild(link);
+    link.click();
+  };
   const [payrolls, setPayrolls] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [fieldReports, setFieldReports] = useState([]);
 
   useEffect(() => {
     // 1. Cek Sesi Login
@@ -41,7 +86,9 @@ export default function ClientAdmin() {
     }
     const parsedSession = JSON.parse(session);
     // Buat Avatar (2 Huruf Pertama)
-    const initials = parsedSession.name.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
+    // Memastikan selalu ada string minimal satu spasi agar split() tidak error
+    const safeName = parsedSession.name || 'User'; 
+    const initials = safeName.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
     setCurrentUser({ ...parsedSession, avatar: initials });
 
     // 2. Tarik Semua Data dari Supabase
@@ -59,6 +106,14 @@ export default function ClientAdmin() {
           hasMobileAccess: c.has_mobile_access
         })));
       }
+
+      // Fetch Attendances
+      const { data: attData } = await supabase.from('attendances').select('*, candidates(nama_lengkap, lokasi_penempatan)').order('created_at', { ascending: false });
+      if (attData) setAttendances(attData);
+
+      // Fetch Field Reports
+      const { data: repData } = await supabase.from('field_reports').select('*, candidates(nama_lengkap)').order('created_at', { ascending: false });
+      if (repData) setFieldReports(repData);
 
       // Fetch Tasks & Comments
       const { data: taskData } = await supabase.from('tasks').select('*, task_comments(*)').order('created_at', { ascending: false });
@@ -202,6 +257,13 @@ export default function ClientAdmin() {
     navigate('/');
   };
 
+  // 7. Simpan Pengaturan Akses Pop-up Per User
+  const handleSaveUserAccess = async () => {
+    // Di tahap asli, ini akan meng-update kolom 'permissions' JSONB di Supabase
+    alert(`Hak akses untuk ${selectedEmployeeAccess.nama_lengkap} berhasil disimpan secara spesifik!`);
+    setIsAccessModalOpen(false);
+  };
+
   return (
     <div className="flex h-screen bg-slate-50 font-sans overflow-hidden">
       
@@ -232,7 +294,8 @@ export default function ClientAdmin() {
           
           {[
             { id: 'hris', icon: Users, label: 'HRIS Dashboard' },
-            { id: 'task', icon: CheckSquare, label: 'Task Management', restricted: true }, // Tambahkan properti restricted
+            { id: 'task', icon: CheckSquare, label: 'Task Management', restricted: true },
+            { id: 'laporan', icon: FileText, label: 'Laporan & Pengajuan' },
             { id: 'finance', icon: Wallet, label: 'Finance Dashboard' }
           ].map((item) => (
             <button key={item.id} 
@@ -328,6 +391,8 @@ export default function ClientAdmin() {
             {/* ========================================================= */}
             {activeMenu === 'hris' && (
               <div className="space-y-6 fade-in">
+                
+                {/* 1. HEADER */}
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                   <div>
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight">HRIS & Recruitment</h2>
@@ -336,12 +401,31 @@ export default function ClientAdmin() {
                   <span className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 flex items-center gap-2 shadow-sm w-max"><Clock size={14}/> 5 Juli 2026</span>
                 </div>
 
+                {/* 2. OVERVIEW STAND BY (Di Luar Tab) */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6">
+                  <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
+                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Total Karyawan</p>
+                    <h3 className="text-2xl md:text-3xl font-black text-slate-800 mt-1 md:mt-2">{candidates.filter(c => c.status === 'INTI').length}</h3>
+                    <p className="text-[10px] md:text-xs text-blue-600 font-medium mt-1">Berstatus Aktif</p>
+                  </div>
+                  <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
+                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Pelamar Baru</p>
+                    <h3 className="text-2xl md:text-3xl font-black text-slate-800 mt-1 md:mt-2">{candidates.filter(c => c.status === 'PENDING').length}</h3>
+                    <p className="text-[10px] md:text-xs text-amber-500 font-medium mt-1">Menunggu Review</p>
+                  </div>
+                  <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
+                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Hadir Hari Ini</p>
+                    <h3 className="text-2xl md:text-3xl font-black text-emerald-600 mt-1 md:mt-2">{attendances.filter(a => a.date === new Date().toISOString().split('T')[0]).length}</h3>
+                    <p className="text-[10px] md:text-xs text-slate-500 font-medium mt-1">Check-in tercatat</p>
+                  </div>
+                </div>
+
+                {/* 3. NAVIGATION TABS (Overview Dihapus, QrForm Digabung) */}
                 <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
                   {[
-                    { id: 'overview', icon: CheckSquare, label: 'Overview' },
-                    { id: 'recruitment', icon: UserPlus, label: 'Data Recruitment' },
+                    { id: 'absensi', icon: CheckSquare, label: 'Data Absensi' },
+                    { id: 'recruitment', icon: UserPlus, label: 'Data Recruitment & QR' },
                     { id: 'database', icon: Database, label: 'Database Karyawan' },
-                    { id: 'qrcode', icon: QrCode, label: 'QR Form Lamaran' },
                   ].map((tab) => (
                     <button key={tab.id} onClick={() => setHrisTab(tab.id)}
                       className={`flex-1 min-w-[140px] flex items-center justify-center gap-2 py-2.5 px-4 whitespace-nowrap text-sm font-semibold rounded-lg transition-all ${hrisTab === tab.id ? 'bg-white text-blue-600 shadow-sm ring-1 ring-slate-200/50' : 'text-slate-500 hover:text-slate-700'}`}>
@@ -350,23 +434,104 @@ export default function ClientAdmin() {
                   ))}
                 </div>
 
-                {hrisTab === 'overview' && (
-                  <div className="space-y-6 fade-in">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6">
-                      <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
-                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Total Karyawan</p>
-                        <h3 className="text-2xl md:text-3xl font-black text-slate-800 mt-1 md:mt-2">{candidates.filter(c => c.status === 'INTI').length}</h3>
-                        <p className="text-[10px] md:text-xs text-blue-600 font-medium mt-1">Berstatus Aktif</p>
+                {/* 4. ISI TAB: ABSENSI (CRUD Lengkap) */}
+                {hrisTab === 'absensi' && (
+                  <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden fade-in space-y-4 p-4 md:p-5">
+                    <div className="flex flex-col md:flex-row justify-between gap-4 border-b border-slate-100 pb-4">
+                      <div className="flex flex-col md:flex-row gap-3 flex-1">
+                        <div className="relative flex-1">
+                          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                          <input type="text" placeholder="Cari Nama Pegawai..." value={filterNama} onChange={e => setFilterNama(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400"/>
+                        </div>
+                        <input type="text" placeholder="Filter Area Lokasi..." value={filterLokasi} onChange={e => setFilterLokasi(e.target.value)} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400"/>
+                        <input type="date" value={filterTanggal} onChange={e => setFilterTanggal(e.target.value)} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400"/>
                       </div>
-                      <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
-                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Pelamar Baru</p>
-                        <h3 className="text-2xl md:text-3xl font-black text-slate-800 mt-1 md:mt-2">{candidates.filter(c => c.status === 'PENDING').length}</h3>
-                        <p className="text-[10px] md:text-xs text-amber-500 font-medium mt-1">Menunggu Review</p>
+                      <div className="flex flex-wrap gap-2 shrink-0">
+                        <button onClick={downloadTemplateAbsen} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold transition-colors">Template Excel</button>
+                        <button onClick={() => alert("Fitur Import CSV/Excel berjalan via backend parser.")} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-3 py-2 rounded-lg text-xs font-bold transition-colors">Import Data</button>
+                        <button onClick={() => { setAbsenForm({ id: null, employee_id: '', date: getNowStr().split('T')[0], check_in_time: '', check_out_time: '', location_gps: '', photo_url: '', status: 'HADIR' }); setIsAbsenModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-sm transition-colors">+ Input Manual</button>
+                      </div>
+                    </div>
+                    
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                          <tr><th className="px-6 py-4">Tanggal</th><th className="px-6 py-4">Pegawai</th><th className="px-6 py-4">Lokasi & Foto</th><th className="px-6 py-4">Waktu (IN/OUT)</th><th className="px-6 py-4 text-center">Aksi</th></tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-sm">
+                          {attendances.filter(a => {
+                            const matchNama = (a.candidates?.nama_lengkap || '').toLowerCase().includes(filterNama.toLowerCase());
+                            const matchLokasi = (a.location_gps || '').toLowerCase().includes(filterLokasi.toLowerCase());
+                            const matchTanggal = filterTanggal === '' || a.date === filterTanggal;
+                            return matchNama && matchLokasi && matchTanggal;
+                          }).map(att => (
+                            <tr key={att.id} className="hover:bg-slate-50">
+                              <td className="px-6 py-4 font-bold text-slate-700">{att.date}</td>
+                              <td className="px-6 py-4 font-bold text-slate-800">{att.candidates?.nama_lengkap || 'Unknown'}</td>
+                              <td className="px-6 py-4">
+                                <span className="text-xs font-bold text-slate-500 block mb-1"><MapPin size={12} className="inline mr-1 text-blue-500"/>{att.location_gps}</span>
+                                {att.photo_url ? <a href={att.photo_url} target="_blank" rel="noreferrer" className="text-[10px] font-black text-blue-600 hover:underline bg-blue-50 px-2 py-0.5 rounded">Lihat Foto</a> : <span className="text-[10px] text-slate-400">Tanpa Foto</span>}
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className="font-black text-emerald-600 block">IN: {att.check_in_time ? att.check_in_time.substring(0,5) : '--:--'}</span>
+                                <span className="font-black text-slate-500 block mt-0.5">OUT: {att.check_out_time ? att.check_out_time.substring(0,5) : '--:--'}</span>
+                              </td>
+                              <td className="px-6 py-4 text-center align-middle">
+                                <div className="flex justify-center gap-2">
+                                  <button onClick={() => { setAbsenForm({ id: att.id, employee_id: att.employee_id, date: att.date, check_in_time: att.check_in_time || '', check_out_time: att.check_out_time || '', location_gps: att.location_gps || '', photo_url: att.photo_url || '', status: att.status }); setIsAbsenModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"><FileText size={16}/></button>
+                                  <button onClick={() => handleDeleteAbsen(att.id)} className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100 transition-colors"><Trash2 size={16}/></button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {attendances.length === 0 && <tr><td colSpan="5" className="text-center py-8 text-slate-400 font-bold">Belum ada data absensi.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. ISI TAB: RECRUITMENT (Digabung dengan QR Form) */}
+                {hrisTab === 'recruitment' && (
+                  <div className="space-y-6 fade-in">
+                    <div className="bg-blue-600 p-6 md:p-8 rounded-2xl shadow-md text-white flex flex-col md:flex-row items-center justify-between gap-6">
+                      <div>
+                        <h3 className="text-xl font-bold mb-2 flex items-center gap-2"><QrCode size={24}/> Form Pendaftaran Online</h3>
+                        <p className="text-blue-100 text-sm max-w-md leading-relaxed">Cetak atau bagikan kode QR ini kepada calon pelamar. Pelamar dapat langsung mengisi data diri melalui smartphone mereka secara mandiri.</p>
+                      </div>
+                      <div className="bg-white p-4 rounded-xl shrink-0">
+                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${window.location.origin}/recruitment`} alt="QR Form" className="w-32 h-32" />
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
+                      <div className="p-4 md:p-5 border-b border-slate-100 bg-amber-50/30 flex justify-between items-center">
+                        <h3 className="font-bold text-amber-900 text-sm md:text-base flex items-center gap-2"><UserPlus size={18} className="text-amber-500"/> Daftar Pelamar Baru Menunggu Review</h3>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                          <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                            <tr><th className="px-6 py-4">Nama Pelamar</th><th className="px-6 py-4">Posisi Dilamar</th><th className="px-6 py-4">No. HP</th><th className="px-6 py-4 text-center">Aksi</th></tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-sm">
+                            {candidates.filter(c => c.status === 'PENDING').map(c => (
+                              <tr key={c.id} className="hover:bg-slate-50">
+                                <td className="px-6 py-4"><span className="font-bold text-slate-800 block">{c.nama_lengkap}</span></td>
+                                <td className="px-6 py-4"><span className="block font-bold text-slate-700">{c.posisi_jabatan}</span></td>
+                                <td className="px-6 py-4"><span className="text-xs font-bold text-slate-700">{c.no_hp || '-'}</span></td>
+                                <td className="px-6 py-4 text-center">
+                                  <button className="bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-100 transition-colors">Review Berkas</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   </div>
                 )}
                 
+                {/* 6. ISI TAB: DATABASE */}
                 {hrisTab === 'database' && (
                   <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden fade-in">
                     <div className="p-4 md:p-5 border-b border-slate-100 bg-blue-50/30 flex justify-between items-center">
@@ -674,49 +839,112 @@ export default function ClientAdmin() {
             )}
 
             {/* ========================================================= */}
-            {/* KONTEN: PENGATURAN HAK AKSES TASK MANAGEMENT DARI HRIS    */}
+            {/* KONTEN BARU: MENU LAPORAN & PENGAJUAN                     */}
+            {/* ========================================================= */}
+            {activeMenu === 'laporan' && (
+              <div className="space-y-6 fade-in">
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Laporan & Pengajuan</h2>
+                    <p className="text-slate-500 text-sm mt-1">Pantau seluruh laporan masuk dari Mobile App karyawan lapangan.</p>
+                  </div>
+                </div>
+                <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
+                  {[
+                    { id: 'patroli', label: 'Laporan Patroli' },
+                    { id: 'reguler', label: 'Laporan Reguler' },
+                    { id: 'cuti', label: 'Pengajuan Cuti/Izin' },
+                    { id: 'koreksi', label: 'Perbaikan Absen' },
+                    { id: 'reimburse', label: 'Reimbursement' },
+                  ].map((tab) => (
+                    <button key={tab.id} onClick={() => setLaporanTab(tab.id)}
+                      className={`flex-1 min-w-[150px] py-2.5 px-4 whitespace-nowrap text-sm font-semibold rounded-lg transition-all ${laporanTab === tab.id ? 'bg-white text-blue-600 shadow-sm ring-1 ring-slate-200/50' : 'text-slate-500 hover:text-slate-700'}`}>
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                  <table className="w-full text-left">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                      <tr><th className="px-6 py-4">Tanggal Masuk</th><th className="px-6 py-4">Pelapor (Mobile App)</th><th className="px-6 py-4">Judul & Keterangan Laporan</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-sm">
+                      {fieldReports.filter(r => r.report_type.toLowerCase() === laporanTab).map(report => (
+                        <tr key={report.id} className="hover:bg-slate-50">
+                          <td className="px-6 py-4 font-bold text-slate-700">{new Date(report.created_at).toLocaleDateString('id-ID')}</td>
+                          <td className="px-6 py-4 font-bold text-slate-800">{report.candidates?.nama_lengkap || 'Unknown'}</td>
+                          <td className="px-6 py-4">
+                            <span className="font-bold text-blue-600 block">{report.title}</span>
+                            <span className="text-xs text-slate-500 mt-1 block max-w-md">{report.description}</span>
+                          </td>
+                        </tr>
+                      ))}
+                      {fieldReports.filter(r => r.report_type.toLowerCase() === laporanTab).length === 0 && (
+                        <tr><td colSpan="3" className="text-center py-8 text-slate-400 font-bold">Belum ada laporan {laporanTab} yang masuk dari Mobile App.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* ========================================================= */}
+            {/* KONTEN: PENGATURAN AKSES & SISTEM (GROUPED)                 */}
             {/* ========================================================= */}
             {activeMenu === 'settings' && (
               <div className="space-y-6 fade-in">
                 <div>
-                  <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Konfigurasi Akses Sistem</h2>
-                  <p className="text-slate-500 text-sm mt-1">Atur hak akses karyawan terhadap Modul Task Management.</p>
+                  <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Konfigurasi Sistem & Akses</h2>
+                  <p className="text-slate-500 text-sm mt-1">Kelola perizinan menu per pengguna, otoritas jabatan, dan parameter operasional.</p>
                 </div>
-                <div className="bg-white border border-slate-200 shadow-sm rounded-[2rem] overflow-hidden">
-                  <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-                     <h3 className="font-black text-slate-800 flex items-center gap-2"><ShieldAlert size={18} className="text-blue-600"/> Hak Akses Karyawan (INTI)</h3>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-left">
+
+                <div className="flex gap-2 border-b border-slate-200 pb-px">
+                   <button onClick={() => setSettingTab('user_access')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'user_access' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Akses Per Pegawai</button>
+                   <button onClick={() => setSettingTab('role_access')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'role_access' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Akses Per Jabatan</button>
+                   <button onClick={() => setSettingTab('gps_rules')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'gps_rules' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Aturan GPS & Absensi</button>
+                </div>
+
+                {settingTab === 'user_access' && (
+                  <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+                    <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                       <h3 className="font-bold text-slate-700">Daftar Pegawai (Klik Atur Akses untuk memunculkan Pop-up)</h3>
+                    </div>
+                    <table className="w-full text-left">
                       <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                        <tr><th className="px-6 py-4">Nama Pegawai & NIK</th><th className="px-6 py-4">Divisi & Jabatan</th><th className="px-6 py-4 text-center">Status Data</th><th className="px-6 py-4 text-center">Akses Task</th><th className="px-6 py-4 text-center">Akses Mobile App</th></tr>
+                        <tr><th className="px-6 py-4">Nama Pegawai & NIK</th><th className="px-6 py-4">Jabatan</th><th className="px-6 py-4 text-center">Tindakan</th></tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-sm">
                         {activeEmployees.map(emp => (
-                          <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="px-6 py-4"><span className="font-bold text-slate-800 block">{emp.nama_lengkap}</span><span className="text-[10px] font-bold text-slate-500">{emp.nik_karyawan}</span></td>
-                            <td className="px-6 py-4"><span className="block font-bold text-slate-700">{emp.bidang_jasa}</span><span className="text-[10px] bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 inline-block mt-1">{emp.posisi_jabatan}</span></td>
-                            <td className="px-6 py-4 text-center"><span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[9px] font-black uppercase">Karyawan Inti</span></td>
-                            <td className="px-6 py-4 text-center align-middle">
-                              <label className="relative inline-flex items-center cursor-pointer justify-center">
-                                <input type="checkbox" className="sr-only peer" checked={emp.hasTaskAccess} onChange={() => toggleTaskAccess(emp.id)} />
-                                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                                <span className={`ml-3 text-xs font-bold ${emp.hasTaskAccess ? 'text-blue-600' : 'text-slate-400'}`}>{emp.hasTaskAccess ? 'Aktif' : 'Nonaktif'}</span>
-                              </label>
-                            </td>
-                            <td className="px-6 py-4 text-center align-middle">
-                              <label className="relative inline-flex items-center cursor-pointer justify-center">
-                                <input type="checkbox" className="sr-only peer" checked={emp.hasMobileAccess} onChange={() => toggleMobileAccess(emp.id)} />
-                                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                                <span className={`ml-3 text-xs font-bold ${emp.hasMobileAccess ? 'text-emerald-600' : 'text-slate-400'}`}>{emp.hasMobileAccess ? 'Aktif' : 'Nonaktif'}</span>
-                              </label>
+                          <tr key={emp.id} className="hover:bg-slate-50">
+                            <td className="px-6 py-4"><span className="font-bold text-slate-800 block">{emp.nama_lengkap}</span><span className="text-[10px] text-slate-500">{emp.nik_karyawan}</span></td>
+                            <td className="px-6 py-4 font-bold text-slate-600">{emp.posisi_jabatan}</td>
+                            <td className="px-6 py-4 text-center">
+                               <button onClick={() => { setSelectedEmployeeAccess(emp); setIsAccessModalOpen(true); }} className="px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg text-xs font-bold transition-colors">Atur Akses Detail</button>
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                </div>
+                )}
+
+                {settingTab === 'role_access' && (
+                  <div className="bg-white p-8 rounded-2xl border border-slate-100 text-center text-slate-400 font-bold">
+                    Fitur pemetaan akses masal berdasarkan Master Jabatan sedang disiapkan.
+                  </div>
+                )}
+
+                {settingTab === 'gps_rules' && (
+                  <div className="bg-white p-6 rounded-2xl border border-slate-200 max-w-xl space-y-6">
+                     <h3 className="font-bold text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2"><MapPin size={18} className="text-rose-500"/> Parameter Geo-Fencing Absensi</h3>
+                     <div>
+                       <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Batas Toleransi Radius (Meter)</label>
+                       <input type="number" defaultValue={50} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-blue-500 font-bold" />
+                       <p className="text-[10px] text-slate-500 mt-2">Jarak maksimal karyawan dari titik kordinat yang ditentukan agar tombol absen bisa ditekan.</p>
+                     </div>
+                     <button className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl hover:bg-slate-900 transition-colors">Simpan Aturan Global</button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -784,6 +1012,54 @@ export default function ClientAdmin() {
                   <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 transition-all hover:-translate-y-0.5 flex items-center gap-2">Kirim Tugas Sekarang</button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+        
+        {/* ========================================================= */}
+        {/* MODAL PENGATURAN AKSES PER USER (POP-UP)                    */}
+        {/* ========================================================= */}
+        {isAccessModalOpen && selectedEmployeeAccess && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[80] flex justify-center items-center p-4">
+            <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
+              <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h3 className="font-black text-lg text-slate-800">Manajer Akses User</h3>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{selectedEmployeeAccess.nama_lengkap}</p>
+                </div>
+                <button onClick={() => setIsAccessModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
+              </div>
+              <div className="p-6 space-y-6 overflow-y-auto max-h-[60vh] custom-scrollbar">
+                
+                {/* Akses Modul Aplikasi */}
+                <div>
+                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Modul Mobile App</h4>
+                  <div className="space-y-3">
+                    {['Laporan Patroli', 'Laporan Reguler', 'Cuti & Izin', 'Koreksi Absen', 'Reimbursement'].map(modul => (
+                      <label key={modul} className="flex items-center justify-between p-3 border border-slate-100 rounded-xl hover:border-blue-200 cursor-pointer transition-colors bg-white">
+                        <span className="text-sm font-bold text-slate-700">{modul}</span>
+                        <input type="checkbox" defaultChecked={true} className="w-5 h-5 text-blue-600 rounded-md border-slate-300 focus:ring-blue-500" />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Akses Khusus / Bypass */}
+                <div>
+                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Otoritas Khusus</h4>
+                  <label className="flex items-center justify-between p-3 border border-amber-200 bg-amber-50/50 rounded-xl cursor-pointer transition-colors">
+                    <div>
+                      <span className="text-sm font-bold text-amber-900 block">Bypass Area GPS Absensi</span>
+                      <span className="text-[10px] text-amber-700 leading-tight block mt-0.5">Pegawai ini bisa absen dari lokasi mana saja tanpa terblokir radius.</span>
+                    </div>
+                    <input type="checkbox" className="w-5 h-5 text-amber-600 rounded-md border-amber-300 focus:ring-amber-500" />
+                  </label>
+                </div>
+
+              </div>
+              <div className="p-5 border-t border-slate-100 bg-white">
+                <button onClick={handleSaveUserAccess} className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20">Simpan Konfigurasi</button>
+              </div>
             </div>
           </div>
         )}
