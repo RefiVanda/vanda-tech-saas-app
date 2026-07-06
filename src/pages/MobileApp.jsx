@@ -1,65 +1,130 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
 import { 
   Home, MapPin, Camera, FileText, User, 
   Clock, ShieldAlert, CreditCard, 
   Calendar, Settings, Lock, Image as ImageIcon, Bell, ArrowRight,
-  CheckCircle2, LogOut, History, Check
+  CheckCircle2, LogOut, LogIn, History, Check, ChevronLeft, ChevronRight, Upload, X, RefreshCw, Plus
 } from 'lucide-react';
 
 export default function MobileApp() {
   const navigate = useNavigate();
-  const [activeMenu, setActiveMenu] = useState('home');
+  const [activeMenu, setActiveMenu] = useState('home'); // 'home', 'settings', 'absen', 'laporan'
   const [laporanTab, setLaporanTab] = useState('reguler');
+  const currentHour = new Date().getHours();
+  const greetingText = currentHour < 11 ? 'PAGI' : currentHour < 15 ? 'SIANG' : currentHour < 18 ? 'SORE' : 'MALAM';
   
   // State Aksi & Form
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [expandedAbsen, setExpandedAbsen] = useState(null);
+  const fileInputRef = useRef(null);
   
-  // State Absensi (In & Out)
+  // State User & Database
+  const [currentUser, setCurrentUser] = useState({ id: '', name: 'Loading...', role: '', division: '', avatar: '', avatar_url: null });
+  const [permissions, setPermissions] = useState({ patroli: false, reguler: false, cuti: false, koreksi: false, reimburse: false, bebas_gps: false });
+  const [attendanceHistory, setAttendanceHistory] = useState([]);
+  const [reportHistory, setReportHistory] = useState([]);
+
+  // State Khusus Laporan Patroli
+  const [patrolLocStatus, setPatrolLocStatus] = useState(null); // null, 'locating', 'valid', 'invalid'
+  const [patrolLocName, setPatrolLocName] = useState('');
+  const [patrolPhotos, setPatrolPhotos] = useState([]); // Array format: { base64, desc }
+  const [patrolDesc, setPatrolDesc] = useState(''); // Keterangan menyeluruh
+  const [expandedPatrolDate, setExpandedPatrolDate] = useState(null); // State untuk dropdown tanggal
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [isPatrolCameraOpen, setIsPatrolCameraOpen] = useState(false);
+  const [patrolFacingMode, setPatrolFacingMode] = useState('environment'); // environment (belakang), user (depan)
+  const patrolVideoRef = useRef(null);
+  const patrolCanvasRef = useRef(null);
+  const [patrolCameraStream, setPatrolCameraStream] = useState(null);
+
+  // State Khusus Laporan Reguler
+  const [regulerPhotos, setRegulerPhotos] = useState([]);
+  const [regulerDesc, setRegulerDesc] = useState('');
+  const [expandedRegulerDate, setExpandedRegulerDate] = useState(null);
+  const [isRegulerFormOpen, setIsRegulerFormOpen] = useState(false); // Toggle buka/tutup form
+
+  // ==========================================
+  // STATE & REF UNTUK FITUR ABSENSI KAMERA LIVE
+  // ==========================================
   const [absenId, setAbsenId] = useState(null);
   const [hasAbsenMasuk, setHasAbsenMasuk] = useState(false);
   const [hasAbsenKeluar, setHasAbsenKeluar] = useState(false);
   const [absenInTime, setAbsenInTime] = useState('--:--');
   const [absenOutTime, setAbsenOutTime] = useState('--:--');
+
+  const [absenInPhotoDb, setAbsenInPhotoDb] = useState(null);
+  const [absenOutPhotoDb, setAbsenOutPhotoDb] = useState(null);
+  
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [cameraStream, setCameraStream] = useState(null);
   const [absenPhoto, setAbsenPhoto] = useState(null);
+  const [userLocation, setUserLocation] = useState(null); // { lat, lng }
+  const [isLocating, setIsLocating] = useState(false);
 
-  const [reportTitle, setReportTitle] = useState('');
-  const [reportDesc, setReportDesc] = useState('');
+  const [officeLocations, setOfficeLocations] = useState([]);
 
-  // State User & Database
-  const [currentUser, setCurrentUser] = useState({ id: '', name: 'Loading...', role: '', division: '', avatar: '' });
-  const [permissions, setPermissions] = useState({ patroli: false, reguler: false, cuti: false, koreksi: false, reimburse: false, bebas_gps: false });
-  const [attendanceHistory, setAttendanceHistory] = useState([]);
-  const [reportHistory, setReportHistory] = useState([]);
+  // Rumus hitung jarak koordinat dalam meter (Haversine Formula)
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371e3;
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c; 
+  };
 
   useEffect(() => {
-    const session = localStorage.getItem('syntegra_user_session');
+    const session = localStorage.getItem('vest_user_session');
     if (!session) { navigate('/'); return; }
     
     const parsed = JSON.parse(session);
+    setCurrentUser(prev => ({ ...prev, ...parsed }));
     fetchUserData(parsed.id, parsed);
     checkTodayAttendance(parsed.id);
     fetchHistories(parsed.id);
+    fetchOfficeLocations();
   }, []);
 
+  // Effect untuk menyalakan/mematikan kamera saat menu absen dibuka/ditutup
+  useEffect(() => {
+    if (activeMenu === 'absen') {
+      startCamera();
+      getLocation();
+    } else {
+      stopCamera();
+    }
+  }, [activeMenu]);
+
   const fetchUserData = async (userId, parsedSession) => {
-    const { data } = await supabase.from('candidates').select('nama_lengkap, role, bidang_jasa, permissions').eq('id', userId).single();
+    const { data } = await supabase.from('employees').select('nama_lengkap, role, bidang_jasa, permissions, avatar_url').eq('id', userId).single();
     if (data) {
       const initials = data.nama_lengkap.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
-      setCurrentUser({ id: userId, name: data.nama_lengkap, role: data.role, division: data.bidang_jasa, avatar: initials });
-      if (data.permissions) setPermissions(data.permissions);
+      setCurrentUser({ id: userId, name: data.nama_lengkap, role: data.role, division: data.bidang_jasa, avatar: initials, avatar_url: data.avatar_url });
+      const userPerms = typeof data.permissions === 'string' ? JSON.parse(data.permissions) : data.permissions;
+      if (userPerms) setPermissions(userPerms);
     } else {
       const initials = (parsedSession.name || 'User').split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
-      setCurrentUser({ ...parsedSession, avatar: initials });
+      setCurrentUser({ ...parsedSession, avatar: initials, avatar_url: parsedSession.avatar_url || null });
     }
   };
 
+  const fetchOfficeLocations = async () => {
+    const { data } = await supabase.from('office_locations').select('*');
+    if (data) setOfficeLocations(data);
+  };
+
   const fetchHistories = async (userId) => {
-    const { data: attData } = await supabase.from('attendances').select('*').eq('employee_id', userId).order('created_at', { ascending: false }).limit(3);
+    const { data: attData } = await supabase.from('attendances').select('*').eq('employee_id', userId).order('created_at', { ascending: false }).limit(31);
     if (attData) setAttendanceHistory(attData);
 
-    const { data: repData } = await supabase.from('field_reports').select('*').eq('employee_id', userId).order('created_at', { ascending: false }).limit(3);
+    // Tambahan: Tarik juga data laporan milik user ini
+    const { data: repData } = await supabase.from('field_reports').select('*').eq('employee_id', userId).order('created_at', { ascending: false }).limit(20);
     if (repData) setReportHistory(repData);
   };
 
@@ -72,393 +137,1043 @@ export default function MobileApp() {
       setAbsenId(data.id);
       setHasAbsenMasuk(true);
       setAbsenInTime(data.check_in_time?.substring(0, 5) || '--:--');
+      setAbsenInPhotoDb(data.photo_url); // Ambil foto IN
       if (data.check_out_time) {
         setHasAbsenKeluar(true);
         setAbsenOutTime(data.check_out_time.substring(0, 5));
+        setAbsenOutPhotoDb(data.photo_out_url); // Ambil foto OUT
       }
     }
   };
 
-  const handleAbsen = async () => {
-    if (!absenPhoto) return alert("Wajib melampirkan foto selfie/kamera untuk absen!");
-    setIsSubmitting(true);
-    
-    const d = new Date();
-    const timeString = d.toTimeString().split(' ')[0];
-    const dateString = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-    const lokasiStr = permissions.bebas_gps ? 'Bebas GPS (Remote)' : 'Sektor 7 (Sesuai Radius)';
-
-    if (!hasAbsenMasuk) {
-      // PROSES ABSEN MASUK
-      const { error } = await supabase.from('attendances').insert([{
-        employee_id: currentUser.id, date: dateString, check_in_time: timeString, location_gps: lokasiStr, photo_url: absenPhoto, status: 'HADIR'
-      }]);
-      if (!error) {
-        alert("Absen Masuk Berhasil!");
-        checkTodayAttendance(currentUser.id);
-        fetchHistories(currentUser.id);
-        setAbsenPhoto(null);
-        setActiveMenu('home');
-      } else alert("Gagal absen: " + error.message);
-    } else if (hasAbsenMasuk && !hasAbsenKeluar) {
-      // PROSES ABSEN KELUAR (PULANG SHIFT)
-      const { error } = await supabase.from('attendances').update({ check_out_time: timeString }).eq('id', absenId);
-      if (!error) {
-        alert("Absen Keluar Berhasil! Shift selesai.");
-        setHasAbsenKeluar(true);
-        setAbsenOutTime(timeString.substring(0, 5));
-        fetchHistories(currentUser.id);
-        setAbsenPhoto(null);
-        setActiveMenu('home');
-      } else alert("Gagal absen keluar: " + error.message);
+  // --- FUNGSI KAMERA LIVE & LOKASI ---
+  const startCamera = async () => {
+    try {
+      setAbsenPhoto(null);
+      // Meminta akses kamera depan (selfie)
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      setCameraStream(stream);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      alert("Akses kamera ditolak atau perangkat tidak memiliki kamera.");
+      setActiveMenu('home');
     }
-
-    setIsSubmitting(false);
   };
 
-  const handleKirimLaporan = async () => {
-    if (!reportTitle || !reportDesc) return alert("Judul dan keterangan wajib diisi!");
+  const stopCamera = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      setCameraStream(null);
+    }
+  };
+
+  const takePhoto = () => {
+    if (videoRef.current && canvasRef.current) {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      
+      // --- LOGIKA COMPRESS (RESIZE DIMENSI) ---
+      // Atur batas maksimal lebar foto (640px adalah standar ideal untuk absensi)
+      const MAX_WIDTH = 640; 
+      const scaleSize = MAX_WIDTH / video.videoWidth;
+      
+      // Hitung dimensi baru dengan mempertahankan proporsi (aspect ratio) asli
+      const newWidth = MAX_WIDTH;
+      const newHeight = video.videoHeight * scaleSize;
+
+      // Terapkan dimensi baru ke canvas
+      canvas.width = newWidth;
+      canvas.height = newHeight;
+      
+      const context = canvas.getContext('2d');
+      // Gambar frame video ke dalam canvas dengan ukuran yang sudah diperkecil
+      context.drawImage(video, 0, 0, newWidth, newHeight);
+      
+      // --- LOGIKA COMPRESS (KUALITAS FILE) ---
+      // Ubah canvas menjadi gambar JPEG dengan kualitas 60% (0.6)
+      // Ini sudah sangat cukup jelas untuk melihat wajah, tapi size-nya sangat kecil
+      const photoData = canvas.toDataURL('image/jpeg', 0.6); 
+      
+      setAbsenPhoto(photoData);
+      stopCamera(); // Matikan kamera setelah jepret
+    }
+  };
+
+  const getLocation = () => {
+    setIsLocating(true);
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
+          setIsLocating(false);
+        },
+        (error) => {
+          console.error("Gagal mendapatkan lokasi:", error);
+          setUserLocation(null);
+          setIsLocating(false);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    } else {
+      setIsLocating(false);
+    }
+  };
+
+  // --- LOGIKA LAPORAN PATROLI ---
+  const checkPatrolLocation = () => {
+    setPatrolLocStatus('locating');
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          let valid = false;
+          let locName = '';
+          for (const office of officeLocations) {
+            const distance = calculateDistance(position.coords.latitude, position.coords.longitude, office.latitude, office.longitude);
+            if (distance <= office.radius) { valid = true; locName = office.name; break; }
+          }
+          if (valid || permissions.bebas_gps) {
+            setPatrolLocStatus('valid'); 
+            setPatrolLocName(valid ? locName : 'Bypass Area (Bebas GPS)');
+          } else { setPatrolLocStatus('invalid'); }
+        },
+        () => setPatrolLocStatus('invalid'), { enableHighAccuracy: true }
+      );
+    } else { setPatrolLocStatus('invalid'); }
+  };
+
+  const startPatrolCamera = async (mode = 'environment') => {
+    try {
+      if (patrolCameraStream) patrolCameraStream.getTracks().forEach(t => t.stop());
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
+      setPatrolCameraStream(stream);
+      if (patrolVideoRef.current) patrolVideoRef.current.srcObject = stream;
+      setPatrolFacingMode(mode);
+      setIsPatrolCameraOpen(true);
+    } catch (err) {
+      alert("Gagal mengakses kamera. Pastikan perangkat memiliki kamera dan izin diberikan.");
+    }
+  };
+
+  const stopPatrolCamera = () => {
+    if (patrolCameraStream) {
+      patrolCameraStream.getTracks().forEach(t => t.stop());
+      setPatrolCameraStream(null);
+    }
+    setIsPatrolCameraOpen(false);
+  };
+
+  const capturePatrolPhoto = () => {
+    if (patrolVideoRef.current && patrolCanvasRef.current) {
+      const video = patrolVideoRef.current;
+      const canvas = patrolCanvasRef.current;
+
+      const MAX_WIDTH = 800; // Kompresi
+      const scaleSize = MAX_WIDTH / video.videoWidth;
+      canvas.width = MAX_WIDTH;
+      canvas.height = video.videoHeight * scaleSize;
+
+      const context = canvas.getContext('2d');
+      // Balik (flip) gambar jika pakai kamera depan agar tidak seperti cermin terbalik
+      if (patrolFacingMode === 'user') {
+        context.translate(canvas.width, 0);
+        context.scale(-1, 1);
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7); 
+      if (laporanTab === 'patroli') {
+        setPatrolPhotos(prev => [...prev, { base64: compressedBase64, desc: '' }]);
+      } else if (laporanTab === 'reguler') {
+        setRegulerPhotos(prev => [...prev, { base64: compressedBase64, desc: '' }]);
+      }
+
+      stopPatrolCamera(); // Tutup layar kamera setelah jepret
+    }
+  };
+
+  const handlePatrolSubmit = async () => {
+    if(patrolPhotos.length === 0) return alert("Minimal lampirkan 1 foto kegiatan!");
+    setIsSubmittingReport(true);
+    try {
+      let uploadedData = [];
+      // Loop untuk upload multi-foto
+      for (let i = 0; i < patrolPhotos.length; i++) {
+        const photo = patrolPhotos[i];
+        const base64Response = await fetch(photo.base64);
+        const blob = await base64Response.blob();
+        const fileName = `patrol-${currentUser.id}-${Date.now()}-${i}.jpg`;
+
+        const { error: uploadError } = await supabase.storage.from('attendance_photos').upload(fileName, blob);
+        if(uploadError) throw uploadError;
+
+        const { data } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
+        uploadedData.push({ url: data.publicUrl, desc: photo.desc });
+      }
+
+      // Kita gabungkan keterangan menyeluruh dan array foto ke dalam satu JSON String
+      const descJson = JSON.stringify({
+        notes: patrolDesc,
+        photos: uploadedData
+      });
+
+      const { error } = await supabase.from('field_reports').insert([{
+        employee_id: currentUser.id,
+        report_type: 'patroli',
+        title: `Patroli di ${patrolLocName}`,
+        description: descJson
+      }]);
+
+      if (error) throw error;
+      alert("Laporan Patroli Berhasil Terkirim!");
+      setPatrolPhotos([]);
+      setPatrolDesc('');
+      setPatrolLocStatus(null);
+      fetchHistories(currentUser.id);
+      setPatrolLocStatus(null);
+      fetchHistories(currentUser.id);
+    // Layar akan otomatis kembali ke daftar riwayat patroli
+    } catch (error) {
+      alert("Gagal kirim laporan: " + error.message);
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  };
+
+  const handleRegulerSubmit = async () => {
+    if(regulerPhotos.length === 0 && !regulerDesc) return alert("Wajib mengisi keterangan atau melampirkan minimal 1 foto!");
+    setIsSubmittingReport(true);
+    try {
+      let uploadedData = [];
+      for (let i = 0; i < regulerPhotos.length; i++) {
+        const photo = regulerPhotos[i];
+        const base64Response = await fetch(photo.base64);
+        const blob = await base64Response.blob();
+        const fileName = `reguler-${currentUser.id}-${Date.now()}-${i}.jpg`;
+
+        const { error: uploadError } = await supabase.storage.from('attendance_photos').upload(fileName, blob);
+        if(uploadError) throw uploadError;
+
+        const { data } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
+        uploadedData.push({ url: data.publicUrl, desc: photo.desc });
+      }
+
+      const descJson = JSON.stringify({ notes: regulerDesc, photos: uploadedData });
+      const { error } = await supabase.from('field_reports').insert([{
+        employee_id: currentUser.id,
+        report_type: 'reguler',
+        title: `Laporan Reguler Lapangan`,
+        description: descJson
+      }]);
+
+      if (error) throw error;
+      alert("Laporan Reguler Berhasil Terkirim!");
+      setRegulerPhotos([]);
+      setRegulerDesc('');
+      setIsRegulerFormOpen(false); // Tutup form, kembali ke riwayat
+      fetchHistories(currentUser.id);
+    } catch (error) {
+      alert("Gagal kirim laporan: " + error.message);
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  };
+
+  // --- FUNGSI SUBMIT ABSEN KE DATABASE ---
+  const handleAbsenSubmit = async () => {
+    if (!absenPhoto) return alert("Foto wajib diambil!");
+    if (!userLocation && !permissions.bebas_gps) return alert("Lokasi GPS belum ditemukan. Pastikan GPS menyala.");
     setIsSubmitting(true);
-    const { error } = await supabase.from('field_reports').insert([{ employee_id: currentUser.id, report_type: laporanTab.toUpperCase(), title: reportTitle, description: reportDesc }]);
-    setIsSubmitting(false);
     
-    if (!error) {
-      alert("Laporan berhasil dikirim!");
-      setReportTitle(''); setReportDesc('');
+    try {
+      let lokasiStr = 'Lokasi tidak terdeteksi';
+      
+      // === VALIDASI GEO-FENCING (RADIUS ABSENSI) ===
+      if (permissions.bebas_gps) {
+        // Jika akun punya izin khusus bypass GPS
+        lokasiStr = userLocation ? `Bebas GPS (${userLocation.lat}, ${userLocation.lng})` : 'Bebas GPS';
+      } else {
+        let isValidLocation = false;
+        // Cek satu per satu apakah karyawan ada di dalam radius kantor manapun
+        for (const office of officeLocations) {
+          const distance = calculateDistance(userLocation.lat, userLocation.lng, office.latitude, office.longitude);
+          if (distance <= office.radius) {
+            isValidLocation = true;
+            lokasiStr = office.name; // GANTI KOORDINAT MENJADI NAMA KANTOR
+            break;
+          }
+        }
+
+        // Jika tidak masuk radius kantor manapun, tolak absensi
+        if (!isValidLocation) {
+          setIsSubmitting(false);
+          return alert("GAGAL ABSEN: Anda berada di luar radius lokasi kantor yang diizinkan!");
+        }
+      }
+
+      // === PROSES UPLOAD FOTO & DATABASE ===
+      const base64Response = await fetch(absenPhoto);
+      const blob = await base64Response.blob();
+      const fileName = `absen-${currentUser.id}-${Date.now()}.jpg`;
+
+      const { error: uploadError } = await supabase.storage.from('attendance_photos').upload(fileName, blob);
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
+      const finalPhotoUrl = publicUrlData.publicUrl;
+
+      const d = new Date();
+      const timeString = d.toTimeString().split(' ')[0];
+      const dateString = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+
+      if (!hasAbsenMasuk) {
+        const { error } = await supabase.from('attendances').insert([{
+          employee_id: currentUser.id, date: dateString, check_in_time: timeString, location_gps: lokasiStr, photo_url: finalPhotoUrl, status: 'HADIR'
+        }]);
+        if (error) throw error;
+        alert("Absen Masuk Berhasil!");
+      } else if (hasAbsenMasuk && !hasAbsenKeluar) {
+        const { error } = await supabase.from('attendances').update({ 
+          check_out_time: timeString, location_gps: lokasiStr, photo_out_url: finalPhotoUrl 
+        }).eq('id', absenId);
+        if (error) throw error;
+        alert("Absen Keluar Berhasil! Hati-hati di jalan.");
+      }
+
+      checkTodayAttendance(currentUser.id);
       fetchHistories(currentUser.id);
       setActiveMenu('home');
-    } else alert("Gagal mengirim laporan: " + error.message);
+      setAbsenPhoto(null);
+    } catch (error) {
+      alert("Gagal memproses absen: " + error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleAvatarUpload = async (event) => {
+    try {
+      setUploadingAvatar(true);
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${currentUser.id}-${Math.random()}.${fileExt}`;
+
+      let { error: uploadError } = await supabase.storage.from('avatars').upload(fileName, file);
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(fileName);
+      const avatarUrl = publicUrlData.publicUrl;
+
+      // Baris di bawah ini yang sebelumnya tidak sengaja terhapus
+      const { error: updateError } = await supabase.from('employees').update({ avatar_url: avatarUrl }).eq('id', currentUser.id);
+      if (updateError) throw updateError;
+
+      // Update state sekaligus simpan ke cache LocalStorage agar tidak hilang saat refresh
+      setCurrentUser(prev => ({ ...prev, avatar_url: avatarUrl }));
+      const sessionData = JSON.parse(localStorage.getItem('vest_user_session'));
+      if(sessionData) { sessionData.avatar_url = avatarUrl; localStorage.setItem('vest_user_session', JSON.stringify(sessionData)); }
+      alert('Foto profil berhasil diperbarui!');    
+    } catch (error) {
+      alert('Gagal mengupload foto: ' + error.message);
+    } finally {
+      setUploadingAvatar(false);
+    }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('syntegra_user_session');
+    localStorage.removeItem('vest_user_session');
     navigate('/');
   };
 
-  // Komponen Helper Grid Menu Dinamis
-  const MenuIcon = ({ icon: Icon, label, colorClass, bgClass, onClick }) => (
-    <button onClick={onClick} className="flex flex-col items-center gap-2 group transition-transform active:scale-95">
-      <div className={`w-14 h-14 rounded-[1.25rem] flex items-center justify-center shadow-sm ${bgClass}`}>
-        <Icon size={24} className={colorClass} strokeWidth={2.5}/>
-      </div>
-      <span className="text-[10px] font-bold text-slate-600 text-center leading-tight max-w-[60px]">{label}</span>
-    </button>
-  );
+  const renderUserAvatar = (sizeClasses) => {
+  if (currentUser.avatar_url) return <img src={currentUser.avatar_url} alt="Profile" className={`${sizeClasses} object-cover rounded-2xl shadow-lg border border-white/20`} />;
+  return <div className={`${sizeClasses} bg-[#86d764] rounded-2xl flex items-center justify-center font-bold text-white shadow-lg border border-green-400`}>{currentUser.avatar}</div>;
+  };
+
+  // Menentukan nama lokasi secara real-time untuk overlay kamera
+  let activeLocationName = 'Mencari lokasi...';
+  if (userLocation) {
+    if (permissions.bebas_gps) {
+      activeLocationName = 'Bebas GPS (Bisa absen di mana saja)';
+    } else {
+      activeLocationName = 'Di Luar Radius Kantor';
+      for (const office of officeLocations) {
+        const distance = calculateDistance(userLocation.lat, userLocation.lng, office.latitude, office.longitude);
+        if (distance <= office.radius) {
+          activeLocationName = office.name;
+          break;
+        }
+      }
+    }
+  }
 
   return (
-    <div className="min-h-screen bg-slate-100 flex justify-center font-sans selection:bg-indigo-500 selection:text-white">
-      {/* Wrapper Utama Mobile */}
-      <div className="w-full max-w-md bg-slate-50 min-h-screen shadow-2xl relative flex flex-col h-screen overflow-hidden">
+    <div className="min-h-screen bg-[#F4F7FB] flex justify-center font-sans">
+      <div className="w-full max-w-md bg-[#F4F7FB] h-[100dvh] relative flex flex-col overflow-hidden shadow-2xl">
         
-        {/* ========================================== */}
-        {/* === STICKY HEADER (BANKING STYLE)        === */}
-        {/* ========================================== */}
-        <header className="bg-gradient-to-b from-indigo-900 via-indigo-800 to-indigo-700 px-6 pt-12 pb-20 shrink-0 shadow-lg relative z-20 rounded-b-[2.5rem]">
-          <div className="flex justify-between items-center relative z-10">
-            <div className="flex items-center gap-3">
-              <div className="w-11 h-11 bg-white/10 rounded-full flex items-center justify-center font-bold text-white border border-white/20 backdrop-blur-md shadow-inner">
-                {currentUser.avatar}
-              </div>
-              <div>
-                <p className="text-[10px] text-indigo-200 font-medium tracking-wider uppercase mb-0.5">Selamat Bekerja,</p>
-                <h1 className="font-bold text-base text-white leading-tight">{currentUser.name}</h1>
-              </div>
-            </div>
-            <button className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center text-white backdrop-blur-md border border-white/20 hover:bg-white/20 transition-colors relative">
-              <Bell size={18} />
-              <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-rose-500 rounded-full border border-indigo-800"></span>
-            </button>
-          </div>
-          
-          <div className="mt-6 flex justify-between items-end relative z-10">
-            <div>
-              <p className="text-indigo-200 text-xs font-medium mb-1">Jam Masuk</p>
-              <h2 className="text-3xl font-black text-white tracking-tight">{hasAbsenMasuk ? absenInTime : '--:--'}</h2>
-            </div>
-            <div className="text-right">
-              <p className="text-indigo-200 text-xs font-medium mb-1">Jam Pulang</p>
-              <h2 className="text-3xl font-black text-white tracking-tight">{hasAbsenKeluar ? absenOutTime : '--:--'}</h2>
-            </div>
-          </div>
-
-          <div className="absolute top-[-20%] right-[-10%] w-64 h-64 bg-white opacity-5 blur-[80px] rounded-full pointer-events-none"></div>
-          <div className="absolute bottom-[-10%] left-[-20%] w-48 h-48 bg-indigo-500 opacity-20 blur-[60px] rounded-full pointer-events-none"></div>
-        </header>
-
-        {/* ========================================== */}
-        {/* === KONTEN UTAMA (SCROLLABLE AREA)       === */}
-        {/* ========================================== */}
-        <main className="flex-1 overflow-y-auto px-5 pb-32 -mt-8 z-10 custom-scrollbar relative">
-
-          {/* --- TAB: HOME DASHBOARD --- */}
-          {activeMenu === 'home' && (
-            <div className="space-y-6 fade-in pt-2">
-              <div className="bg-white rounded-3xl p-5 shadow-xl shadow-indigo-900/5 border border-slate-100 flex justify-between items-center relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-indigo-50 to-transparent rounded-bl-full pointer-events-none"></div>
-                <div className="relative z-10 flex-1 border-r border-slate-100">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase mb-1"><MapPin size={12}/> Lokasi GPS</div>
-                  <p className="font-black text-sm text-indigo-950 truncate pr-2">{permissions.bebas_gps ? 'Bebas Radius' : 'Deteksi Aktif'}</p>
+        <div className="relative flex-1 overflow-hidden">
+          {/* ========================================== */}
+          {/* === VIEW 1: HOME === */}
+          {/* ========================================== */}
+          <div className={`absolute inset-0 flex flex-col transition-transform duration-300 ease-in-out ${activeMenu !== 'home' ? '-translate-x-full' : 'translate-x-0'}`}>
+            {/* Header Biru & Kartu Kehadiran */}
+            <div className="shrink-0 relative z-20">
+              <div className="bg-gradient-to-br from-[#0a195c] to-[#142c94] rounded-b-[2rem] pt-10 pb-16 px-6 shadow-md">
+                <div className="flex flex-col gap-5">
+              {/* Baris Atas: Sapaan & Foto Profil melingkar */}
+              <div className="flex justify-between items-center">
+                <div>
+                  <h1 className="text-[10px] font-bold text-white/70 tracking-widest mb-0.5">SELAMAT {greetingText},</h1>
+                  <h2 className="text-xl font-bold text-white tracking-tight">{currentUser.name}</h2>
                 </div>
-                <div className="relative z-10 flex-1 pl-4 text-right">
-                  <div className="flex items-center justify-end gap-1.5 text-xs font-bold text-slate-400 uppercase mb-1"><Clock size={12}/> Status</div>
-                  <p className="font-black text-sm text-indigo-950">{hasAbsenMasuk && !hasAbsenKeluar ? 'Sedang Bertugas' : 'Off Duty'}</p>
-                </div>
+                {renderUserAvatar("w-12 h-12 rounded-full border-2 border-white/20 shadow-lg")}
               </div>
 
-              {/* Grid Menu Dinamis */}
-              <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
-                <h3 className="text-sm font-bold text-slate-800 mb-5">Menu Operasional</h3>
-                <div className="grid grid-cols-4 gap-y-6 gap-x-2">
-                  {permissions.patroli && <MenuIcon icon={ShieldAlert} label="Patroli" bgClass="bg-rose-50" colorClass="text-rose-500" onClick={() => { setLaporanTab('patroli'); setActiveMenu('laporan'); }}/>}
-                  {permissions.reguler && <MenuIcon icon={FileText} label="Laporan" bgClass="bg-indigo-50" colorClass="text-indigo-500" onClick={() => { setLaporanTab('reguler'); setActiveMenu('laporan'); }}/>}
-                  {permissions.cuti && <MenuIcon icon={Calendar} label="Izin/Cuti" bgClass="bg-amber-50" colorClass="text-amber-500" onClick={() => setActiveMenu('pengajuan')}/>}
-                  {permissions.koreksi && <MenuIcon icon={Clock} label="Koreksi" bgClass="bg-emerald-50" colorClass="text-emerald-500" onClick={() => setActiveMenu('pengajuan')}/>}
-                  {permissions.reimburse && <MenuIcon icon={CreditCard} label="Klaim" bgClass="bg-sky-50" colorClass="text-sky-500" onClick={() => setActiveMenu('pengajuan')}/>}
-                  <MenuIcon icon={User} label="Profil" bgClass="bg-purple-50" colorClass="text-purple-500" onClick={() => setActiveMenu('settings')}/>
-                </div>
+              {/* Baris Bawah: Kotak Info (Digital ID Card Style) lebar penuh */}
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/20 w-full shadow-inner relative overflow-hidden">
+                {/* Aksen kilau modern */}
+                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2"></div>
                 
-                {!permissions.patroli && !permissions.reguler && !permissions.cuti && !permissions.koreksi && !permissions.reimburse && (
-                  <div className="mt-4 p-3 bg-amber-50 rounded-xl text-center border border-amber-100">
-                    <p className="text-[10px] font-bold text-amber-700">Hubungi Admin untuk membuka akses menu pengajuan.</p>
+                <div className="flex justify-between text-[10px] text-white/70 mb-1.5 uppercase tracking-wider font-semibold"><span>Nomor Induk Karyawan</span><span>Head Office</span></div>
+                <div className="flex justify-between text-sm font-black text-white mb-3 pb-3 border-b border-white/10 relative z-10"><span>O-31-140225-00047</span><span></span></div>
+                
+                <div className="flex text-[10px] text-white/70 mb-1 uppercase tracking-wider font-semibold"><span className="w-1/2">Divisi</span><span className="w-1/2 text-right">Jabatan</span></div>
+                <div className="flex text-xs font-bold text-white relative z-10"><span className="w-1/2 truncate pr-2">{currentUser.division || 'Operasional'}</span><span className="w-1/2 text-right truncate">Staff</span></div>
+              </div>
+            </div>
+              </div>
+
+              <div className="px-5 -mt-10">
+                <div className="bg-white rounded-2xl p-4 shadow-lg shadow-blue-900/5 border border-slate-100">
+                  <div className="flex justify-between items-center mb-3 pb-3 border-b border-slate-100">
+                    <h2 className="text-lg font-bold text-slate-800">Kehadiran</h2>
+                    <p className="text-xs font-semibold text-slate-500">Senin, 06 Juli 2026</p>
                   </div>
-                )}
-              </div>
-
-              {/* Pengumuman HRD */}
-              <div className="bg-gradient-to-r from-indigo-900 to-indigo-700 rounded-3xl p-6 shadow-md text-white relative overflow-hidden flex items-center justify-between">
-                <div className="absolute right-0 opacity-10 pointer-events-none"><Bell size={100} className="-translate-y-4 translate-x-4"/></div>
-                <div className="relative z-10 w-2/3">
-                  <span className="text-[9px] font-black tracking-widest text-indigo-300 uppercase mb-1 block">Informasi HRD</span>
-                  <h3 className="font-bold text-sm leading-tight">Pengingat: Verifikasi wajah wajib saat absen keluar shift.</h3>
+                  <div className="flex justify-between items-center">
+                    <div className="text-center w-1/2 border-r border-slate-100 flex flex-col items-center">
+                      <p className="text-[#55c158] text-xs font-bold flex items-center justify-center gap-1 mb-1"><LogIn size={16} strokeWidth={3}/> Absen In</p>
+                      <p className="text-2xl font-black text-slate-800 tracking-tight">{hasAbsenMasuk ? absenInTime : '--:--'}</p>
+                    </div>
+                    <div className="text-center w-1/2 flex flex-col items-center">
+                      <p className="text-[#e24e4e] text-xs font-bold flex items-center justify-center gap-1 mb-1"><LogOut size={16} strokeWidth={3}/> Absen Out</p>
+                      <p className="text-2xl font-black text-slate-800 tracking-tight">{hasAbsenKeluar ? absenOutTime : '--:--'}</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="relative z-10 w-10 h-10 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-md"><ArrowRight size={18}/></div>
               </div>
             </div>
-          )}
 
-          {/* --- TAB: ABSENSI (Kamera & Logika In/Out) --- */}
-          {activeMenu === 'absen' && (
-            <div className="space-y-4 fade-in mt-6">
-              <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center">
-                <h2 className="font-black text-slate-800 text-lg mb-4">
-                  {hasAbsenMasuk && !hasAbsenKeluar ? 'Verifikasi Absen Keluar' : 'Verifikasi Absen Masuk'}
-                </h2>
-                
-                {/* Area Kamera HTML5 Capture */}
-                <label className="w-full h-72 bg-slate-900 rounded-[2rem] relative flex flex-col items-center justify-center text-slate-500 overflow-hidden shadow-inner cursor-pointer active:scale-95 transition-transform group">
-                  {absenPhoto ? (
-                    <img src={absenPhoto} alt="Preview" className="absolute inset-0 w-full h-full object-cover opacity-90" />
-                  ) : (
-                    <>
-                      <div className="absolute inset-0 bg-indigo-900/40 mix-blend-multiply pointer-events-none"></div>
-                      <div className="w-48 h-48 border-2 border-dashed border-white/50 rounded-full absolute z-10 animate-[spin_10s_linear_infinite] pointer-events-none"></div>
-                      <Camera size={40} className="z-10 text-white/90 mb-3 drop-shadow-md group-hover:scale-110 transition-transform"/>
-                      <span className="text-xs font-bold tracking-wide z-10 text-white/90 bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm pointer-events-none">Ketuk untuk Buka Kamera</span>
-                    </>
+            <main className="flex-1 overflow-y-auto px-5 py-4 z-10 scroll-smooth pb-24">
+              <div className="mb-6">
+                <h3 className="font-bold text-slate-800 text-sm mb-3">Informasi dan Instruksi</h3>
+                <div className="w-full h-20 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-center text-slate-400 text-xs">Belum ada instruksi</div>
+              </div>
+
+              {/* MENU KARYAWAN */}
+              <div className="mb-4">
+                <h3 className="font-bold text-slate-800 text-sm mb-3">Menu</h3>
+                <div className="grid grid-cols-4 gap-4 bg-white/90 backdrop-blur-md p-5 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+                  {permissions?.reguler && (
+                    <button onClick={() => { setLaporanTab('reguler'); setActiveMenu('laporan'); }} className="flex flex-col items-center gap-2 active:scale-95">
+                      <div className="w-14 h-14 bg-gradient-to-br from-amber-50 to-amber-100/80 rounded-2xl flex items-center justify-center shadow-sm"><FileText size={24} className="text-yellow-600"/></div>
+                      <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Reguler</span>
+                    </button>
                   )}
-                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => {
-                    if(e.target.files && e.target.files[0]) setAbsenPhoto(URL.createObjectURL(e.target.files[0]));
-                  }}/>
-                </label>
-                
-                <div className="w-full mt-6 space-y-4">
-                  <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 flex items-center justify-between">
+                  {permissions?.patroli && (
+                    <button onClick={() => { setLaporanTab('patroli'); setActiveMenu('laporan'); }} className="flex flex-col items-center gap-2 active:scale-95">
+                      <div className="w-14 h-14 bg-gradient-to-br from-amber-50 to-amber-100/80 rounded-2xl flex items-center justify-center shadow-sm"><ShieldAlert size={24} className="text-yellow-600"/></div>
+                      <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Patroli</span>
+                    </button>
+                  )}
+                  {permissions?.reimburse && (
+                    <button onClick={() => { setLaporanTab('reimburse'); setActiveMenu('laporan'); }} className="flex flex-col items-center gap-2 active:scale-95">
+                      <div className="w-14 h-14 bg-gradient-to-br from-blue-50 to-blue-100/80 rounded-2xl flex items-center justify-center shadow-sm"><CreditCard size={24} className="text-blue-600"/></div>
+                      <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Reimburse</span>
+                    </button>
+                  )}
+                  <button onClick={() => setActiveMenu('ringkasan')} className="flex flex-col items-center gap-2 active:scale-95">
+                    <div className="w-14 h-14 bg-gradient-to-br from-emerald-50 to-emerald-100/80 rounded-2xl flex items-center justify-center shadow-sm"><History size={24} className="text-emerald-600"/></div>
+                    <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Ringkasan<br/>Absen</span>
+                  </button>
+                </div>
+              </div>
+            </main>
+          </div>
+
+          {/* ========================================== */}
+          {/* === VIEW 2: SETTINGS === */}
+          {/* ========================================== */}
+          <div className={`absolute inset-0 bg-[#F4F7FB] flex flex-col transition-transform duration-300 ease-in-out z-20 ${activeMenu === 'settings' ? 'translate-x-0' : 'translate-x-full'}`}>
+            
+            {/* Input File Tersembunyi */}
+            <input type="file" ref={fileInputRef} className="hidden" accept="image/png, image/jpeg, image/jpg" onChange={handleAvatarUpload} />
+
+            <div className="px-6 pt-12 pb-6 bg-white shadow-sm flex items-center">
+              <h1 className="text-xl font-bold text-slate-800 flex-1 text-center">Pengaturan Profil</h1>
+            </div>
+
+            <main className="flex-1 overflow-y-auto px-6 py-8 pb-24">
+              <div className="flex flex-col items-center mb-8">
+                <div className="relative mb-4">
+                  {renderUserAvatar("w-28 h-28 text-3xl shadow-md rounded-[2rem]")}
+                  <button 
+                    onClick={() => fileInputRef.current.click()} 
+                    disabled={uploadingAvatar}
+                    className="absolute -bottom-2 -right-2 bg-[#0a195c] p-2.5 rounded-full text-white shadow-lg border-2 border-white active:scale-95 transition-transform"
+                  >
+                    {uploadingAvatar ? <Clock size={18} className="animate-spin" /> : <Camera size={18} />}
+                  </button>
+                </div>
+                <h2 className="text-xl font-bold text-slate-800">{currentUser.name}</h2>
+                <p className="text-sm text-slate-500 font-medium mt-1">{currentUser.division || 'Operasional'}</p>
+              </div>
+
+              {/* Menu List Settings */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <button onClick={() => fileInputRef.current.click()} className="w-full flex items-center justify-between p-4 border-b border-slate-100 active:bg-slate-50">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-blue-50 text-blue-600 rounded-lg"><ImageIcon size={20} /></div>
+                    <span className="font-semibold text-slate-700 text-sm">Ganti Foto Profil</span>
+                  </div>
+                  <ChevronRight size={20} className="text-slate-400" />
+                </button>
+                <button onClick={handleLogout} className="w-full flex items-center justify-between p-4 active:bg-slate-50">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-red-50 text-red-600 rounded-lg"><LogOut size={20} /></div>
+                    <span className="font-semibold text-red-600 text-sm">Keluar (Logout)</span>
+                  </div>
+                  <ChevronRight size={20} className="text-slate-400" />
+                </button>
+              </div>
+            </main>
+          </div>
+
+          {/* ========================================== */}
+          {/* === VIEW 3: RINGKASAN ABSENSI === */}
+          {/* ========================================== */}
+          <div className={`absolute inset-0 bg-[#F4F7FB] flex flex-col transition-transform duration-300 ease-in-out z-20 ${activeMenu === 'ringkasan' ? 'translate-x-0' : 'translate-x-full'}`}>
+            <div className="px-6 pt-12 pb-6 bg-white shadow-sm flex items-center justify-between z-10">
+              <button onClick={() => setActiveMenu('home')} className="p-2 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200"><ChevronLeft size={20}/></button>
+              <h1 className="text-lg font-bold text-slate-800">Ringkasan Absensi</h1>
+              <div className="w-9"></div> {/* Spacer */}
+            </div>
+
+            <main className="flex-1 overflow-y-auto px-5 py-6 pb-24 space-y-3 custom-scrollbar">
+              {attendanceHistory.map(att => (
+                <div key={att.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden transition-all">
+                  <button onClick={() => setExpandedAbsen(expandedAbsen === att.id ? null : att.id)} className="w-full p-4 flex justify-between items-center bg-white hover:bg-slate-50">
                     <div className="flex items-center gap-3">
-                      <div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl"><MapPin size={18}/></div>
-                      <div>
-                        <p className="text-xs font-bold text-slate-800">Akurasi GPS Mendukung</p>
-                        <p className="text-[10px] font-medium text-slate-500">{permissions.bebas_gps ? 'Bypass Mode Aktif' : 'Posisi: Sektor 7 (Jarak 12m)'}</p>
+                      <div className="bg-emerald-100 p-2 rounded-xl text-emerald-600"><Calendar size={20}/></div>
+                      <div className="text-left">
+                        <p className="text-sm font-bold text-slate-800">{att.date}</p>
+                        <p className="text-[10px] text-slate-500 font-medium">Klik untuk detail</p>
                       </div>
                     </div>
-                    <CheckCircle2 size={20} className="text-emerald-500"/>
-                  </div>
-                  
-                  <button 
-                    onClick={handleAbsen}
-                    disabled={isSubmitting || hasAbsenKeluar}
-                    className={`w-full text-white font-black py-4 rounded-2xl text-sm transition-all shadow-xl 
-                      ${hasAbsenKeluar ? 'bg-slate-400 shadow-none' : hasAbsenMasuk ? 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/30' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/30'} 
-                      ${isSubmitting ? 'opacity-70 cursor-not-allowed' : 'active:scale-95'}`}
-                  >
-                    {isSubmitting ? 'MEMPROSES...' : hasAbsenKeluar ? 'ABSENSI HARI INI SELESAI' : hasAbsenMasuk ? 'REKAM ABSEN KELUAR' : 'REKAM ABSEN MASUK'}
+                    <ChevronRight size={20} className={`text-slate-400 transition-transform ${expandedAbsen === att.id ? 'rotate-90' : ''}`} />
                   </button>
 
-                  <div className="pt-5 border-t border-slate-100 w-full text-left">
-                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-1.5"><History size={12}/> Riwayat Absen Terakhir</h3>
-                    <div className="space-y-2">
-                      {attendanceHistory.map(att => (
-                        <div key={att.id} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
-                          <div>
-                            <p className="text-xs font-bold text-slate-700">{att.date}</p>
-                            <p className="text-[9px] font-medium text-slate-500"><MapPin size={8} className="inline mr-0.5 text-indigo-400"/> {att.location_gps}</p>
+                  {expandedAbsen === att.id && (
+                    <div className="p-4 bg-slate-50 border-t border-slate-100 space-y-4">
+                      <div className="flex gap-3 items-start">
+                        {/* Detail Absen Masuk */}
+                        <div className="w-1/2 bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
+                          <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest block mb-1">Masuk</span>
+                          <span className="text-lg font-black text-slate-800 block mb-2">{att.check_in_time ? att.check_in_time.substring(0,5) : '--:--'}</span>
+                          {att.photo_url ? (
+                            <img src={att.photo_url} alt="In" className="w-full h-24 object-cover rounded-lg mb-2 border border-slate-200" />
+                          ) : (
+                            <div className="w-full h-24 bg-slate-100 rounded-lg mb-2 flex items-center justify-center text-[10px] font-bold text-slate-400">No Photo</div>
+                          )}
+                          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(att.location_gps)}`} target="_blank" rel="noreferrer" className="w-full flex items-center justify-center gap-1 bg-blue-50 text-blue-600 py-1.5 rounded-md text-[10px] font-bold hover:bg-blue-100 transition-colors">
+                            <MapPin size={12}/> Cek Maps
+                          </a>
+                        </div>
+
+                        {/* Detail Absen Keluar */}
+                        <div className="w-1/2 bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
+                          <span className="text-[10px] font-black text-rose-600 uppercase tracking-widest block mb-1">Keluar</span>
+                          <span className="text-lg font-black text-slate-800 block mb-2">{att.check_out_time ? att.check_out_time.substring(0,5) : '--:--'}</span>
+                          {att.photo_out_url ? (
+                            <img src={att.photo_out_url} alt="Out" className="w-full h-24 object-cover rounded-lg mb-2 border border-slate-200" />
+                          ) : (
+                            <div className="w-full h-24 bg-slate-100 rounded-lg mb-2 flex items-center justify-center text-[10px] font-bold text-slate-400">No Photo</div>
+                          )}
+                          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(att.location_gps)}`} target="_blank" rel="noreferrer" className="w-full flex items-center justify-center gap-1 bg-rose-50 text-rose-600 py-1.5 rounded-md text-[10px] font-bold hover:bg-rose-100 transition-colors">
+                            <MapPin size={12}/> Cek Maps
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {attendanceHistory.length === 0 && <div className="text-center py-10 text-slate-400 font-bold">Belum ada riwayat absensi.</div>}
+            </main>
+          </div>
+        </div>
+        {/* Penutup overflow flex utama */}
+
+        {/* ========================================== */}
+        {/* === VIEW 4: LAPORAN === */}
+        {/* ========================================== */}
+        <div className={`absolute inset-0 bg-[#F4F7FB] flex flex-col transition-transform duration-300 ease-in-out z-20 ${activeMenu === 'laporan' ? 'translate-x-0' : 'translate-x-full'}`}>
+          <div className="px-6 pt-12 pb-6 bg-white shadow-sm flex items-center justify-between z-10">
+            <button onClick={() => { setActiveMenu('home'); setPatrolLocStatus(null); setPatrolPhotos([]); setIsRegulerFormOpen(false); setRegulerPhotos([]); setRegulerDesc(''); }} className="p-2 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200 active:scale-95 transition-transform"><ChevronLeft size={20}/></button>
+            <h1 className="text-lg font-bold text-slate-800">Laporan {laporanTab === 'patroli' ? 'Patroli' : 'Reguler'}</h1>
+            <div className="w-9"></div>
+          </div>
+
+          <main className="flex-1 overflow-y-auto px-5 py-6 pb-32 space-y-5 custom-scrollbar">
+            {/* ========================================== */}
+            {/* UI LAPORAN PATROLI */}
+            {/* ========================================== */}
+            {laporanTab === 'patroli' && (
+              <div className="space-y-5">
+                {/* --- CARD CEK LOKASI --- */}
+                <div className="bg-white p-5 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 text-center relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-rose-50 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2"></div>
+                  <div className="w-16 h-16 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center mx-auto mb-3 relative z-10"><MapPin size={28}/></div>
+                  <h3 className="font-black text-slate-800 mb-1 relative z-10">Validasi Titik Patroli</h3>
+                  <p className="text-[10px] text-slate-500 mb-5 px-4 font-medium relative z-10">Sistem akan mencocokkan koordinat Anda dengan data area konfigurasi.</p>
+
+                  {!patrolLocStatus && (
+                    <button onClick={checkPatrolLocation} className="w-full bg-[#0a195c] text-white py-3.5 rounded-2xl font-bold text-sm hover:bg-blue-900 shadow-lg shadow-blue-900/20 active:scale-95 transition-all">Cek Lokasi Saya</button>
+                  )}
+                  {patrolLocStatus === 'locating' && (
+                    <div className="w-full bg-slate-100 text-slate-500 py-3.5 rounded-2xl font-bold text-sm flex justify-center items-center gap-2"><RefreshCw size={16} className="animate-spin"/> Memindai Satelit...</div>
+                  )}
+                  {patrolLocStatus === 'invalid' && (
+                    <div className="animate-in zoom-in duration-200">
+                      <div className="w-full bg-rose-50 border border-rose-100 text-rose-600 py-3.5 rounded-2xl font-bold text-sm mb-2">Di Luar Area Patroli!</div>
+                      <button onClick={checkPatrolLocation} className="text-xs text-slate-500 hover:text-slate-700 underline font-semibold">Coba Scan Ulang</button>
+                    </div>
+                  )}
+                  {patrolLocStatus === 'valid' && (
+                    <div className="w-full bg-emerald-50 border border-emerald-200 text-emerald-700 py-3 rounded-2xl font-bold text-sm flex flex-col items-center animate-in zoom-in duration-200">
+                      <span className="flex items-center gap-1"><CheckCircle2 size={16}/> Terverifikasi</span>
+                      <span className="text-[10px] text-emerald-600 font-medium mt-0.5">{patrolLocName}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* --- RIWAYAT PATROLI --- */}
+                {!patrolLocStatus && (
+                  <div className="mt-2 space-y-4 animate-in fade-in duration-300 pb-10">
+                    <h3 className="font-bold text-slate-800 text-sm px-1 border-b border-slate-200 pb-2">Riwayat Patroli (7 Hari Terakhir)</h3>
+                    {(() => {
+                      const sevenDaysAgo = new Date();
+                      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                      sevenDaysAgo.setHours(0,0,0,0);
+
+                      const recentPatrols = reportHistory
+                        .filter(r => r.report_type === 'patroli')
+                        .filter(r => new Date(r.created_at) >= sevenDaysAgo);
+
+                      const grouped = recentPatrols.reduce((acc, report) => {
+                        const dateStr = new Date(report.created_at).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                        if (!acc[dateStr]) acc[dateStr] = [];
+                        acc[dateStr].push(report);
+                        return acc;
+                      }, {});
+
+                      const dates = Object.keys(grouped);
+
+                      if (dates.length === 0) {
+                        return (
+                          <div className="text-center py-10 bg-white rounded-3xl border border-slate-100 border-dashed shadow-sm">
+                            <FileText size={32} className="mx-auto text-slate-300 mb-2"/>
+                            <p className="text-[11px] text-slate-400 font-bold">Belum ada riwayat patroli dalam 7 hari terakhir.</p>
                           </div>
-                          <div className="text-right">
-                            <p className="text-xs font-black text-emerald-600">IN: {att.check_in_time?.substring(0,5) || '--'}</p>
-                            <p className="text-[10px] font-bold text-slate-500">OUT: {att.check_out_time?.substring(0,5) || '--'}</p>
-                          </div>
+                        );
+                      }
+
+                      return dates.map(dateStr => (
+                        <div key={dateStr} className="bg-white rounded-2xl shadow-[0_4px_15px_rgb(0,0,0,0.03)] border border-slate-100 overflow-hidden transition-all mb-4">
+                          <button onClick={() => setExpandedPatrolDate(expandedPatrolDate === dateStr ? null : dateStr)} className="w-full p-4 flex justify-between items-center bg-white hover:bg-slate-50 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <div className="bg-blue-50 p-2 rounded-xl text-blue-600"><Calendar size={18}/></div>
+                              <span className="text-xs font-bold text-slate-800">{dateStr}</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-[10px] font-bold text-white bg-emerald-500 px-2 py-0.5 rounded-full">{grouped[dateStr].length} Laporan</span>
+                              <ChevronRight size={18} className={`text-slate-400 transition-transform duration-300 ${expandedPatrolDate === dateStr ? 'rotate-90' : ''}`} />
+                            </div>
+                          </button>
+
+                          {expandedPatrolDate === dateStr && (
+                            <div className="p-4 bg-slate-50/80 border-t border-slate-100 space-y-4">
+                              {grouped[dateStr].map(report => {
+                                let parsedDesc = { notes: '', photos: [] };
+                                try { parsedDesc = JSON.parse(report.description); } catch(e) {}
+                                const timeStr = new Date(report.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+                                return (
+                                  <div key={report.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                    <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-2">
+                                      <div>
+                                        <h4 className="text-xs font-bold text-[#0a195c] mb-0.5">{report.title}</h4>
+                                        <p className="text-[10px] text-slate-500 font-medium flex items-center gap-1"><Clock size={10}/> {timeStr} WIB</p>
+                                      </div>
+                                    </div>
+                                    {parsedDesc.notes && (
+                                      <div className="bg-amber-50/50 p-3 rounded-xl border border-amber-100/50 mb-4 relative">
+                                        <span className="text-[10px] font-black text-amber-700 uppercase tracking-widest block mb-1">Kesimpulan Situasi</span>
+                                        <p className="text-[11px] text-slate-700 font-medium leading-relaxed">{parsedDesc.notes}</p>
+                                      </div>
+                                    )}
+                                    {parsedDesc.photos && parsedDesc.photos.length > 0 && (
+                                      <div className="grid grid-cols-1 gap-3">
+                                        {parsedDesc.photos.map((p, i) => (
+                                          <div key={i} className="flex gap-3 bg-slate-50 p-2.5 rounded-xl border border-slate-100 items-start">
+                                            <img src={p.url} alt="patrol" className="w-16 h-16 object-cover rounded-lg border border-slate-200 shadow-sm shrink-0" />
+                                            <div className="flex-1 min-w-0">
+                                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Lampiran {i+1}</p>
+                                              <p className="text-[11px] text-slate-700 font-medium break-words leading-snug">{p.desc ? p.desc : <span className="italic text-slate-400">Tidak ada keterangan gambar.</span>}</p>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                )}
+
+                {/* --- FORM INPUT LAPORAN PATROLI --- */}
+                {patrolLocStatus === 'valid' && (
+                  <div className="bg-white p-5 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 animate-in slide-in-from-bottom-4 duration-300">
+                    <h3 className="font-bold text-slate-800 text-sm mb-4 border-b border-slate-100 pb-2">Dokumentasi & Keterangan</h3>
+
+                    <div className="space-y-3 mb-4">
+                      {patrolPhotos.map((photo, idx) => (
+                        <div key={idx} className="flex gap-3 items-start bg-slate-50 p-3 rounded-2xl border border-slate-200 animate-in fade-in">
+                          <img src={photo.base64} alt={`Preview ${idx}`} className="w-20 h-20 object-cover rounded-xl shadow-sm border border-white" />
+                          <textarea 
+                            placeholder="Keterangan foto (opsional)..."
+                            value={photo.desc}
+                            onChange={(e) => {
+                              const newPhotos = [...patrolPhotos];
+                              newPhotos[idx].desc = e.target.value;
+                              setPatrolPhotos(newPhotos);
+                            }}
+                            className="flex-1 h-20 p-2.5 text-[11px] border border-slate-200 rounded-xl outline-none focus:border-[#0a195c] focus:ring-2 focus:ring-[#0a195c]/20 resize-none bg-white font-medium custom-scrollbar transition-all"
+                          />
+                          <button onClick={() => setPatrolPhotos(patrolPhotos.filter((_, i) => i !== idx))} className="text-slate-400 hover:text-rose-500 p-1 bg-white rounded-lg border border-slate-200 shadow-sm active:scale-95"><X size={16}/></button>
                         </div>
                       ))}
                     </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
-          {/* --- TAB: LAPORAN (Patroli & Reguler) --- */}
-          {activeMenu === 'laporan' && (
-            <div className="space-y-4 fade-in mt-6">
-              <div className="flex p-1.5 bg-white border border-slate-100 rounded-2xl shadow-sm">
-                {permissions.reguler && <button onClick={() => setLaporanTab('reguler')} className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all ${laporanTab === 'reguler' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Lap. Reguler</button>}
-                {permissions.patroli && <button onClick={() => setLaporanTab('patroli')} className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all ${laporanTab === 'patroli' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Lap. Patroli</button>}
-              </div>
+                    <button onClick={() => startPatrolCamera('environment')} className="flex flex-col items-center justify-center w-full py-4 border-2 border-dashed border-blue-200 bg-blue-50/50 rounded-2xl text-[#0a195c] font-bold text-xs cursor-pointer hover:bg-blue-50 transition-colors mb-6 active:scale-95">
+                      <Camera size={20} className="mb-1"/> {patrolPhotos.length > 0 ? 'Tambah Foto Laporan (Kamera)' : 'Mulai Foto Laporan (Kamera)'}
+                    </button>
 
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-5">
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Judul Laporan</label>
-                  <input type="text" value={reportTitle} onChange={(e) => setReportTitle(e.target.value)} className="w-full text-sm p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:outline-none focus:border-indigo-500 transition-colors" placeholder="Ketik judul kejadian..." />
-                </div>
-                
-                {laporanTab === 'patroli' && (
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Verifikasi Area Pos</label>
-                    <button className="w-full text-sm p-4 bg-indigo-50 border-2 border-indigo-200 border-dashed rounded-2xl text-indigo-600 font-black flex items-center justify-center gap-2 hover:bg-indigo-100 transition-colors">
-                      <Camera size={18}/> Pindai QR Code Pos
+                    <div className="mb-4">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Kolom keterangan</label>
+                      <textarea 
+                        placeholder="Tuliskan lengkap situasi atau kondisi patroli di sini..."
+                        value={patrolDesc}
+                        onChange={(e) => setPatrolDesc(e.target.value)}
+                        className="w-full h-24 p-3.5 text-xs border border-slate-200 rounded-2xl outline-none focus:border-[#0a195c] focus:ring-4 focus:ring-[#0a195c]/10 resize-none bg-slate-50 focus:bg-white font-medium custom-scrollbar transition-all"
+                      />
+                    </div>
+
+                    <button onClick={handlePatrolSubmit} disabled={isSubmittingReport} className="w-full bg-emerald-500 text-white py-3.5 rounded-2xl font-bold text-sm shadow-[0_8px_20px_rgba(16,185,129,0.3)] active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                      {isSubmittingReport ? <RefreshCw size={18} className="animate-spin"/> : <CheckCircle2 size={18}/>}
+                      {isSubmittingReport ? 'Mengunggah Data...' : 'Kirim Laporan Patroli'}
                     </button>
                   </div>
                 )}
-
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Keterangan Detail</label>
-                  <textarea rows="4" value={reportDesc} onChange={(e) => setReportDesc(e.target.value)} className="w-full text-sm p-4 bg-slate-50 border border-slate-200 rounded-2xl font-medium focus:outline-none focus:border-indigo-500 transition-colors resize-none custom-scrollbar" placeholder="Jelaskan temuan secara rinci..."></textarea>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Bukti Foto Laporan</label>
-                  <button className="w-20 h-20 bg-slate-50 border-2 border-slate-200 border-dashed hover:bg-slate-100 hover:border-indigo-300 rounded-2xl flex flex-col items-center justify-center text-slate-400 transition-colors">
-                    <ImageIcon size={24} className="mb-1"/><span className="text-[9px] font-bold">Tambah</span>
-                  </button>
-                </div>
-
-                <button onClick={handleKirimLaporan} disabled={isSubmitting} className="w-full bg-slate-800 hover:bg-slate-900 active:scale-95 text-white font-black py-4 rounded-2xl text-sm mt-2 transition-all shadow-lg shadow-slate-800/20 disabled:opacity-70">
-                  {isSubmitting ? 'MENYIMPAN DATA...' : 'KIRIM LAPORAN SEKARANG'}
-                </button>
               </div>
+            )}
 
-              {/* Riwayat Laporan */}
-              <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 mt-4">
-                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-1.5"><History size={12}/> Riwayat Laporan Anda</h3>
-                <div className="space-y-3">
-                  {reportHistory.map(rep => (
-                    <div key={rep.id} className="flex justify-between items-start bg-slate-50 p-3 rounded-xl border border-slate-100">
-                      <div>
-                        <p className="text-xs font-bold text-slate-700 line-clamp-1">{rep.title}</p>
-                        <p className="text-[9px] font-medium text-slate-500 mt-0.5">{rep.report_type}</p>
-                      </div>
-                      <span className="text-[9px] font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0"><Check size={10}/> Terkirim</span>
+            {/* ========================================== */}
+            {/* UI LAPORAN REGULER */}
+            {/* ========================================== */}
+            {laporanTab === 'reguler' && (
+              <div className="space-y-5">
+                {!isRegulerFormOpen ? (
+                  // --- MODE RIWAYAT & TOMBOL MULAI ---
+                  <div className="animate-in fade-in duration-300">
+                    <button onClick={() => setIsRegulerFormOpen(true)} className="w-full bg-[#0a195c] text-white py-4 rounded-3xl font-bold text-sm hover:bg-blue-900 shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2 mb-6">
+                      <Plus size={20}/> Mulai Laporan Reguler
+                    </button>
+
+                    <h3 className="font-bold text-slate-800 text-sm px-1 border-b border-slate-200 pb-2 mb-4">Riwayat Reguler (7 Hari Terakhir)</h3>
+
+                    {(() => {
+                      const sevenDaysAgo = new Date();
+                      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                      sevenDaysAgo.setHours(0,0,0,0);
+
+                      const recentRegulers = reportHistory
+                        .filter(r => r.report_type === 'reguler')
+                        .filter(r => new Date(r.created_at) >= sevenDaysAgo);
+
+                      const grouped = recentRegulers.reduce((acc, report) => {
+                        const dateStr = new Date(report.created_at).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                        if (!acc[dateStr]) acc[dateStr] = [];
+                        acc[dateStr].push(report);
+                        return acc;
+                      }, {});
+
+                      const dates = Object.keys(grouped);
+
+                      if (dates.length === 0) {
+                        return (
+                          <div className="text-center py-10 bg-white rounded-3xl border border-slate-100 border-dashed shadow-sm">
+                            <FileText size={32} className="mx-auto text-slate-300 mb-2"/>
+                            <p className="text-[11px] text-slate-400 font-bold">Belum ada riwayat laporan reguler.</p>
+                          </div>
+                        );
+                      }
+
+                      return dates.map(dateStr => (
+                        <div key={dateStr} className="bg-white rounded-2xl shadow-[0_4px_15px_rgb(0,0,0,0.03)] border border-slate-100 overflow-hidden transition-all mb-4">
+                          <button onClick={() => setExpandedRegulerDate(expandedRegulerDate === dateStr ? null : dateStr)} className="w-full p-4 flex justify-between items-center bg-white hover:bg-slate-50 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <div className="bg-blue-50 p-2 rounded-xl text-blue-600"><Calendar size={18}/></div>
+                              <span className="text-xs font-bold text-slate-800">{dateStr}</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-[10px] font-bold text-white bg-emerald-500 px-2 py-0.5 rounded-full">{grouped[dateStr].length} Laporan</span>
+                              <ChevronRight size={18} className={`text-slate-400 transition-transform duration-300 ${expandedRegulerDate === dateStr ? 'rotate-90' : ''}`} />
+                            </div>
+                          </button>
+
+                          {expandedRegulerDate === dateStr && (
+                            <div className="p-4 bg-slate-50/80 border-t border-slate-100 space-y-4">
+                              {grouped[dateStr].map(report => {
+                                let parsedDesc = { notes: '', photos: [] };
+                                try { parsedDesc = JSON.parse(report.description); } catch(e) {}
+                                const timeStr = new Date(report.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+                                return (
+                                  <div key={report.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                    <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-2">
+                                      <div>
+                                        <h4 className="text-xs font-bold text-[#0a195c] mb-0.5">{report.title}</h4>
+                                        <p className="text-[10px] text-slate-500 font-medium flex items-center gap-1"><Clock size={10}/> {timeStr} WIB</p>
+                                      </div>
+                                    </div>
+                                    {parsedDesc.notes && (
+                                      <div className="bg-amber-50/50 p-3 rounded-xl border border-amber-100/50 mb-4 relative">
+                                        <span className="text-[10px] font-black text-amber-700 uppercase tracking-widest block mb-1">Kesimpulan Situasi</span>
+                                        <p className="text-[11px] text-slate-700 font-medium leading-relaxed">{parsedDesc.notes}</p>
+                                      </div>
+                                    )}
+                                    {parsedDesc.photos && parsedDesc.photos.length > 0 && (
+                                      <div className="grid grid-cols-1 gap-3">
+                                        {parsedDesc.photos.map((p, i) => (
+                                          <div key={i} className="flex gap-3 bg-slate-50 p-2.5 rounded-xl border border-slate-100 items-start">
+                                            <img src={p.url} alt="reguler" className="w-16 h-16 object-cover rounded-lg border border-slate-200 shadow-sm shrink-0" />
+                                            <div className="flex-1 min-w-0">
+                                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Lampiran {i+1}</p>
+                                              <p className="text-[11px] text-slate-700 font-medium break-words leading-snug">{p.desc || <span className="italic text-slate-400">Tidak ada keterangan gambar.</span>}</p>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                ) : (
+                  // --- MODE FORM INPUT REGULER ---
+                  <div className="bg-white p-5 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 animate-in slide-in-from-bottom-4 duration-300">
+                    <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+                      <h3 className="font-bold text-slate-800 text-sm">Form Laporan Reguler</h3>
+                      <button onClick={() => setIsRegulerFormOpen(false)} className="text-slate-400 hover:text-rose-500 bg-slate-50 p-1.5 rounded-full active:scale-95"><X size={16}/></button>
                     </div>
-                  ))}
-                  {reportHistory.length === 0 && <p className="text-xs text-slate-400 italic">Belum ada riwayat laporan.</p>}
-                </div>
-              </div>
-            </div>
-          )}
 
-          {/* --- TAB: PENGAJUAN --- */}
-          {activeMenu === 'pengajuan' && (
-            <div className="space-y-4 fade-in mt-6">
-              <h2 className="font-black text-slate-800 text-lg px-2">Form Pengajuan</h2>
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-5">
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Jenis Pengajuan</label>
-                  <select className="w-full text-sm p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:outline-none focus:border-indigo-500">
-                    <option value="Cuti">Cuti / Izin Tidak Masuk</option>
-                    <option value="Koreksi">Perbaikan Absen (Lupa Absen)</option>
-                    <option value="Reimburse">Reimbursement (Klaim Biaya)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Tanggal Berlakunya</label>
-                  <input type="date" className="w-full text-sm p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:outline-none focus:border-indigo-500" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Alasan / Keterangan</label>
-                  <textarea rows="3" className="w-full text-sm p-4 bg-slate-50 border border-slate-200 rounded-2xl font-medium focus:outline-none focus:border-indigo-500 resize-none" placeholder="Tuliskan alasan pengajuan secara jelas..."></textarea>
-                </div>
-                <button onClick={() => { alert("Pengajuan berhasil dikirim ke Admin/HRD untuk di-review!"); setActiveMenu('home'); }} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-4 rounded-2xl text-sm mt-2 transition-all shadow-lg shadow-indigo-600/30">
-                  KIRIM PENGAJUAN
-                </button>
-              </div>
-            </div>
-          )}
+                    <div className="space-y-3 mb-4">
+                      {regulerPhotos.map((photo, idx) => (
+                        <div key={idx} className="flex gap-3 items-start bg-slate-50 p-3 rounded-2xl border border-slate-200 animate-in fade-in">
+                          <img src={photo.base64} alt={`Preview ${idx}`} className="w-20 h-20 object-cover rounded-xl shadow-sm border border-white" />
+                          <textarea 
+                            placeholder="Keterangan foto (opsional)..."
+                            value={photo.desc}
+                            onChange={(e) => {
+                              const newPhotos = [...regulerPhotos];
+                              newPhotos[idx].desc = e.target.value;
+                              setRegulerPhotos(newPhotos);
+                            }}
+                            className="flex-1 h-20 p-2.5 text-[11px] border border-slate-200 rounded-xl outline-none focus:border-[#0a195c] focus:ring-2 focus:ring-[#0a195c]/20 resize-none bg-white font-medium custom-scrollbar transition-all"
+                          />
+                          <button onClick={() => setRegulerPhotos(regulerPhotos.filter((_, i) => i !== idx))} className="text-slate-400 hover:text-rose-500 p-1 bg-white rounded-lg border border-slate-200 shadow-sm active:scale-95"><X size={16}/></button>
+                        </div>
+                      ))}
+                    </div>
 
-          {/* --- TAB: SETTINGS & PROFIL --- */}
-          {activeMenu === 'settings' && (
-            <div className="space-y-4 fade-in mt-6">
-              <h2 className="font-black text-slate-800 text-lg px-2">Pengaturan Akun</h2>
-              {/* Form Ganti Password Langsung */}
-              <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 space-y-4 mb-4">
-                <h3 className="font-bold text-slate-700 text-sm mb-2 flex items-center gap-2"><Lock size={16}/> Ubah Kata Sandi Login</h3>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Password Baru</label>
-                  <input type="password" placeholder="Masukkan password baru..." className="w-full text-sm p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:outline-none focus:border-indigo-500" />
-                </div>
-                <button onClick={() => { alert("Password berhasil diperbarui!"); setActiveMenu('home'); }} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg">
-                  SIMPAN PASSWORD
-                </button>
-              </div>
-              <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-100">
-                <button onClick={() => alert("Permintaan ubah foto profil dikirim ke Admin HRD.")} className="w-full flex items-center justify-between p-5 hover:bg-slate-50 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl"><User size={20}/></div>
-                    <div className="text-left"><h3 className="font-bold text-slate-700 text-sm">Ubah Foto Profil</h3><p className="text-[10px] text-slate-500 font-medium mt-0.5">Butuh persetujuan HRD</p></div>
-                  </div>
-                </button>
-                <button onClick={() => alert("Form pergantian kata sandi.")} className="w-full flex items-center justify-between p-5 hover:bg-slate-50 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl"><Lock size={20}/></div>
-                    <div className="text-left"><h3 className="font-bold text-slate-700 text-sm">Ganti Kata Sandi</h3><p className="text-[10px] text-slate-500 font-medium mt-0.5">Pembaruan akses login</p></div>
-                  </div>
-                </button>
-                <button onClick={handleLogout} className="w-full flex items-center justify-between p-5 hover:bg-rose-50 transition-colors group">
-                  <div className="flex items-center gap-4">
-                    <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl group-hover:bg-rose-100 transition-colors"><LogOut size={20}/></div>
-                    <div className="text-left"><h3 className="font-bold text-rose-600 text-sm">Keluar Aplikasi</h3><p className="text-[10px] text-rose-400 font-medium mt-0.5">Akhiri sesi Anda saat ini</p></div>
-                  </div>
-                </button>
-              </div>
-            </div>
-          )}
+                    <button onClick={() => startPatrolCamera('environment')} className="flex flex-col items-center justify-center w-full py-4 border-2 border-dashed border-blue-200 bg-blue-50/50 rounded-2xl text-[#0a195c] font-bold text-xs cursor-pointer hover:bg-blue-50 transition-colors mb-6 active:scale-95">
+                      <Camera size={20} className="mb-1"/> {regulerPhotos.length > 0 ? 'Tambah Foto Laporan (Kamera)' : 'Ambil Foto Laporan (Kamera)'}
+                    </button>
 
-        </main>
-        
+                    <div className="mb-4">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Keterangan Laporan</label>
+                      <textarea 
+                        placeholder="Tuliskan isi laporan secara lengkap di sini..."
+                        value={regulerDesc}
+                        onChange={(e) => setRegulerDesc(e.target.value)}
+                        className="w-full h-24 p-3.5 text-xs border border-slate-200 rounded-2xl outline-none focus:border-[#0a195c] focus:ring-4 focus:ring-[#0a195c]/10 resize-none bg-slate-50 focus:bg-white font-medium custom-scrollbar transition-all"
+                      />
+                    </div>
+
+                    <button onClick={handleRegulerSubmit} disabled={isSubmittingReport} className="w-full bg-emerald-500 text-white py-3.5 rounded-2xl font-bold text-sm shadow-[0_8px_20px_rgba(16,185,129,0.3)] active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                      {isSubmittingReport ? <RefreshCw size={18} className="animate-spin"/> : <CheckCircle2 size={18}/>}
+                      {isSubmittingReport ? 'Mengunggah Data...' : 'Kirim Laporan Reguler'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </main>
+        </div>
+
         {/* ========================================== */}
-        {/* === BOTTOM NAVBAR STICKY (BANKING STYLE) === */}
+        {/* === VIEW KAMERA PATROLI (FULL SCREEN) ==== */}
         {/* ========================================== */}
-        <nav className="absolute bottom-0 w-full bg-white rounded-t-[2rem] shadow-[0_-10px_40px_rgba(0,0,0,0.08)] z-50 flex justify-between items-center px-12 py-4 pb-6 shrink-0">
-          
-          <button onClick={() => setActiveMenu('home')} className="flex flex-col items-center gap-1.5 w-12 transition-transform active:scale-95">
-            <Home size={24} className={activeMenu === 'home' ? 'text-indigo-600' : 'text-slate-300'} />
-            <span className={`text-[9px] font-bold ${activeMenu === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>Beranda</span>
-          </button>
-
-          {/* Tombol Absen Tengah (Floating melayang ke atas) */}
-          <div className="absolute left-1/2 -translate-x-1/2 -top-8">
-            <button 
-              onClick={() => setActiveMenu('absen')}
-              className="w-16 h-16 bg-indigo-600 rounded-full border-4 border-slate-50 flex flex-col items-center justify-center text-white shadow-xl shadow-indigo-600/30 hover:bg-indigo-700 hover:-translate-y-1 transition-all active:scale-95"
-            >
-              <Camera size={26} className={hasAbsenMasuk && hasAbsenKeluar ? 'opacity-50' : ''}/>
-            </button>
-            <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[9px] font-black text-indigo-600 tracking-wider">ABSEN</span>
+        <div className={`absolute inset-0 bg-[#0f172a] flex flex-col z-[60] transition-transform duration-300 ${isPatrolCameraOpen ? 'translate-y-0' : 'translate-y-full'}`}>
+          <div className="pt-10 pb-4 px-6 flex justify-between items-center text-white shrink-0">
+            <button onClick={stopPatrolCamera} className="p-2 bg-white/10 rounded-full active:scale-95"><X size={24} /></button>
+            <h1 className="font-bold text-lg">Kamera Laporan</h1>
+            {/* Tombol Balik Kamera (Depan/Belakang) */}
+            <button onClick={() => startPatrolCamera(patrolFacingMode === 'environment' ? 'user' : 'environment')} className="p-2 bg-white/10 rounded-full active:scale-95"><RefreshCw size={24} /></button>
           </div>
 
-          <button onClick={() => setActiveMenu('settings')} className="flex flex-col items-center gap-1.5 w-12 transition-transform active:scale-95">
-            <Settings size={24} className={activeMenu === 'settings' ? 'text-indigo-600' : 'text-slate-300'} />
-            <span className={`text-[9px] font-bold ${activeMenu === 'settings' ? 'text-indigo-600' : 'text-slate-400'}`}>Akun</span>
-          </button>
+          <div className="flex-1 relative bg-black mx-4 mb-4 rounded-[2rem] overflow-hidden border-2 border-white/10 flex items-center justify-center shadow-2xl">
+            <canvas ref={patrolCanvasRef} className="hidden" />
+            <video ref={patrolVideoRef} autoPlay playsInline className={`w-full h-full object-cover ${patrolFacingMode === 'user' ? 'scale-x-[-1]' : ''}`} />
 
-        </nav>
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-56 h-72 border-2 border-dashed border-white/50 rounded-[3rem] opacity-70"></div>
+            </div>
+          </div>
+
+          <div className="h-32 pb-8 shrink-0 flex items-center justify-center">
+            <button onClick={capturePatrolPhoto} className="w-20 h-20 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center border-4 border-white active:scale-90 transition-transform">
+              <div className="w-14 h-14 bg-white rounded-full"></div>
+            </button>
+          </div>
+        </div>
+
+        {/* ========================================== */}
+        {/* === BOTTOM NAVBAR === */}
+        {/* ========================================== */}
+        <div className="shrink-0 z-30 pb-safe relative" style={{ filter: 'drop-shadow(0px -4px 15px rgba(0,0,0,0.06))' }}>
+
+          {/* Background melengkung (cutout) menggunakan CSS Masking */}
+          <nav 
+            className="bg-white flex justify-between items-center px-2 h-[76px]"
+            style={{
+              WebkitMaskImage: 'radial-gradient(circle 38px at 50% 0%, transparent 38px, black 39px)',
+              maskImage: 'radial-gradient(circle 38px at 50% 0%, transparent 38px, black 39px)'
+            }}
+          >
+            {/* Sisi Kiri (2 Menu) */}
+            <div className="flex w-2/5 justify-around pt-3">
+              <button onClick={() => setActiveMenu('home')} className="flex flex-col items-center gap-1 transition-colors">
+                <Home size={22} className={activeMenu === 'home' ? "text-[#0a195c]" : "text-slate-400"} strokeWidth={2.5} />
+                <span className={`text-[10px] font-bold ${activeMenu === 'home' ? "text-[#0a195c]" : "text-slate-400"}`}>Home</span>
+              </button>
+            </div>
+
+            <div className="w-1/5"></div> {/* Spacer Tengah untuk celah */}
+
+            {/* Sisi Kanan (2 Menu) */}
+            <div className="flex w-2/5 justify-around pt-3">
+              <button onClick={() => setActiveMenu('settings')} className="flex flex-col items-center gap-1 transition-colors">
+                <User size={22} className={activeMenu === 'settings' ? "text-[#0a195c]" : "text-slate-400"} strokeWidth={2.5} />
+                <span className={`text-[10px] font-bold ${activeMenu === 'settings' ? "text-[#0a195c]" : "text-slate-400"}`}>Profil</span>
+              </button>
+            </div>
+          </nav>
+
+          {/* Tombol Tengah FAB (Floating Action Button) Melayang */}
+          <div className="absolute left-1/2 -translate-x-1/2 -top-8">
+            <button onClick={() => {
+                if (hasAbsenMasuk && hasAbsenKeluar) return alert("Anda sudah menyelesaikan shift hari ini.");
+                setActiveMenu('absen');
+              }} 
+              className="w-16 h-16 bg-[#0a195c] rounded-full flex flex-col items-center justify-center shadow-[0_8px_20px_rgba(10,25,92,0.4)] active:scale-95 transition-transform border-[3px] border-[#F4F7FB] text-white"
+            >
+              <Camera size={26} strokeWidth={2.5}/>
+            </button>
+          </div>
+        </div>
+        
+        {/* ========================================== */}
+        {/* === VIEW ABSENSI KAMERA (MODAL LAYAR PENUH) === */}
+        {/* ========================================== */}
+        <div className={`absolute inset-0 bg-[#0f172a] flex flex-col z-50 transition-transform duration-300 ${activeMenu === 'absen' ? 'translate-y-0' : 'translate-y-full'}`}>
+          <div className="pt-10 pb-4 px-6 flex justify-between items-center text-white shrink-0">
+            <button onClick={() => setActiveMenu('home')} className="p-2 bg-white/10 rounded-full active:scale-95"><X size={24} /></button>
+            <h1 className="font-bold text-lg">{hasAbsenMasuk ? 'Absen Pulang' : 'Absen Masuk'}</h1>
+            <div className="w-10"></div>
+          </div>
+
+          <div className="flex-1 relative bg-black mx-4 mb-4 rounded-[2rem] overflow-hidden border-2 border-white/10 flex items-center justify-center shadow-2xl">
+            <canvas ref={canvasRef} className="hidden" />
+
+            {!absenPhoto ? (
+              <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover scale-x-[-1]" />
+            ) : (
+              <img src={absenPhoto} alt="Captured" className="w-full h-full object-cover scale-x-[-1]" />
+            )}
+
+            {/* OVERLAY NAMA LOKASI (DYNAMIC) */}
+            <div className="absolute top-4 left-4 right-4 bg-black/60 backdrop-blur-md text-white p-3 rounded-xl border border-white/10">
+              <p className="text-[10px] text-slate-300 font-semibold flex items-center gap-1 mb-0.5"><MapPin size={12}/> Lokasi Terdeteksi:</p>
+              <p className={`text-xs font-bold tracking-wide ${activeLocationName === 'Di Luar Radius Kantor' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {isLocating ? 'Memindai satelit...' : activeLocationName}
+              </p>
+              {/* Tampilkan koordinat kecil di bawah nama lokasi */}
+              {userLocation && <p className="text-[9px] text-slate-400 mt-1 font-mono">{userLocation.lat}, {userLocation.lng}</p>}
+            </div>
+            
+            {!absenPhoto && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-56 h-72 border-2 border-dashed border-white/50 rounded-[3rem] opacity-70"></div>
+              </div>
+            )}
+          </div>
+
+          <div className="h-32 pb-8 shrink-0 flex items-center justify-center gap-12">
+            {!absenPhoto ? (
+              <button onClick={takePhoto} className="w-20 h-20 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center border-4 border-white active:scale-90 transition-transform">
+                <div className="w-14 h-14 bg-white rounded-full"></div>
+              </button>
+            ) : (
+              <>
+                <button onClick={() => { setAbsenPhoto(null); startCamera(); }} disabled={isSubmitting} className="flex flex-col items-center gap-1.5 text-white/80 active:scale-95 transition-transform disabled:opacity-50">
+                  <div className="p-3 bg-white/10 rounded-full"><RefreshCw size={24} /></div>
+                  <span className="text-xs font-bold">Ulangi</span>
+                </button>
+                
+                <button onClick={handleAbsenSubmit} disabled={isSubmitting} className="flex flex-col items-center gap-1.5 text-emerald-400 active:scale-95 transition-transform disabled:opacity-50">
+                  <div className="p-3 bg-emerald-400/20 rounded-full border border-emerald-400/30">
+                    {isSubmitting ? <Clock size={28} className="animate-spin text-emerald-400" /> : <CheckCircle2 size={28} />}
+                  </div>
+                  <span className="text-xs font-bold">{isSubmitting ? 'Mengirim...' : 'Kirim Absen'}</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

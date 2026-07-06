@@ -1,39 +1,40 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, X, CheckSquare, Wallet, Settings, 
+  Camera, Menu, X, CheckSquare, Wallet, Settings, 
   Users, Bell, Search, FileText, 
   ShieldAlert, Clock, ArrowUpRight, ArrowDownRight,
   ChevronLeft, ChevronRight, UserCircle, LogOut,
   UserPlus, Database, QrCode, Download, CheckCircle2, 
   Trash2, MapPin, LayoutDashboard, Receipt, CreditCard, 
-  TrendingUp, TrendingDown, Activity, BarChart3, Building, MessageSquare, Plus, Send
+  TrendingUp, TrendingDown, Activity, BarChart3, Building, MessageSquare, Plus, Send, FolderTree
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../supabase'; // Pastikan nama file ini sesuai dengan yang kamu buat
+import { supabase } from '../supabase'; 
 
 export default function ClientAdmin() {
-  const [activeMenu, setActiveMenu] = useState('hris'); // Saya set default ke finance agar kamu bisa langsung lihat
+  const [activeMenu, setActiveMenu] = useState('hris'); 
   const [activeTaskLevel, setActiveTaskLevel] = useState('Level 1');
   
-  // State Sub-Menu
   const [hrisTab, setHrisTab] = useState('absensi'); 
   const [financeTab, setFinanceTab] = useState('overview');
   const [laporanTab, setLaporanTab] = useState('patroli');
-  const [settingTab, setSettingTab] = useState('user_access');
+  const [settingTab, setSettingTab] = useState('gps_rules');
 
   const navigate = useNavigate();
   const [isAccessModalOpen, setIsAccessModalOpen] = useState(false);
   const [selectedEmployeeAccess, setSelectedEmployeeAccess] = useState(null);
+  const [editPermissions, setEditPermissions] = useState({ patroli: false, reguler: false, cuti: false, koreksi: false, reimburse: false, bebas_gps: false });
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(true);
   const [isProfilePopupOpen, setIsProfilePopupOpen] = useState(false);
   const popupRef = useRef(null);
 
-  // === REAL DATABASE STATE ===
   const [currentUser, setCurrentUser] = useState({ id: '', name: 'Loading...', role: '', division: '', avatar: '' });
-  const [candidates, setCandidates] = useState([]);
+  
+  // STATE DATA UTAMA
+  const [candidates, setCandidates] = useState([]); 
+  const [employees, setEmployees] = useState([]); 
   const [cashflows, setCashflows] = useState([]);
   
-  // State Absensi & CRUD
   const [attendances, setAttendances] = useState([]);
   const [filterNama, setFilterNama] = useState('');
   const [filterLokasi, setFilterLokasi] = useState('');
@@ -41,81 +42,64 @@ export default function ClientAdmin() {
   const [isAbsenModalOpen, setIsAbsenModalOpen] = useState(false);
   const [absenForm, setAbsenForm] = useState({ id: null, employee_id: '', date: '', check_in_time: '', check_out_time: '', location_gps: '', photo_url: '', status: 'HADIR' });
 
-  const handleSaveAbsen = async (e) => {
-    e.preventDefault();
-    const payload = { ...absenForm };
-    delete payload.id; // Hapus ID agar Supabase tidak error saat insert
-    if (absenForm.id) {
-      const { error } = await supabase.from('attendances').update(payload).eq('id', absenForm.id);
-      if (!error) { alert('Data absen diperbarui!'); fetchAllData(); setIsAbsenModalOpen(false); }
-      else alert('Gagal update: ' + error.message);
-    } else {
-      const { error } = await supabase.from('attendances').insert([payload]);
-      if (!error) { alert('Data absen ditambahkan!'); fetchAllData(); setIsAbsenModalOpen(false); }
-      else alert('Gagal menambah: ' + error.message);
-    }
-  };
+  // STATE UNTUK CRUD KLIEN/CABANG & LOKASI (GEO-FENCING)
+  const [clientsList, setClientsList] = useState([]);
+  const [officeLocations, setOfficeLocations] = useState([]);
+  
+  const [isClientModalOpen, setIsClientModalOpen] = useState(false);
+  const [clientForm, setClientForm] = useState({ id: null, name: '', status: 'ACTIVE' });
+  
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
+  const [locationForm, setLocationForm] = useState({ id: null, client_id: '', name: '', latitude: '', longitude: '', radius: 50 });
 
-  const handleDeleteAbsen = async (id) => {
-    if (window.confirm("Hapus data absen ini permanen?")) {
-      const { error } = await supabase.from('attendances').delete().eq('id', id);
-      if (!error) fetchAllData();
-    }
-  };
-
-  const downloadTemplateAbsen = () => {
-    const csvContent = "data:text/csv;charset=utf-8,employee_id,date,check_in_time,check_out_time,location_gps,photo_url,status\nUID_KARYAWAN_DISINI,2026-07-06,08:00:00,17:00:00,Head Office,https://link-foto.com/foto.jpg,HADIR";
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "Template_Import_Absensi.csv");
-    document.body.appendChild(link);
-    link.click();
-  };
   const [payrolls, setPayrolls] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [fieldReports, setFieldReports] = useState([]);
 
+  const [expandedReportId, setExpandedReportId] = useState(null);
+
+  // State Filter Laporan
+  const [filterReportName, setFilterReportName] = useState('');
+  const [filterReportTitle, setFilterReportTitle] = useState('');
+  const [filterReportDate, setFilterReportDate] = useState('');
+  const [filterReportType, setFilterReportType] = useState('Semua');
+
   useEffect(() => {
-    // 1. Cek Sesi Login
-    const session = localStorage.getItem('syntegra_user_session');
+    const session = localStorage.getItem('vest_user_session');
     if (!session) {
-      navigate('/'); // Lempar ke halaman login jika belum login
+      navigate('/'); 
       return;
     }
     const parsedSession = JSON.parse(session);
-    // Buat Avatar (2 Huruf Pertama)
-    // Memastikan selalu ada string minimal satu spasi agar split() tidak error
     const safeName = parsedSession.name || 'User'; 
     const initials = safeName.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
     setCurrentUser({ ...parsedSession, avatar: initials });
 
-    // 2. Tarik Semua Data dari Supabase
     fetchAllData();
   }, []);
 
   const fetchAllData = async () => {
     try {
-      // Fetch HRIS
       const { data: candData } = await supabase.from('candidates').select('*').order('created_at', { ascending: false });
-      if (candData) {
-        setCandidates(candData.map(c => ({
-          ...c,
-          hasTaskAccess: c.has_task_access,
-          hasMobileAccess: c.has_mobile_access
+      if (candData) setCandidates(candData);
+
+      const { data: empData } = await supabase.from('employees').select('*').order('created_at', { ascending: false });
+      if (empData) {
+        setEmployees(empData.map(e => ({
+          ...e,
+          hasTaskAccess: e.has_task_access,
+          hasMobileAccess: e.has_mobile_access
         })));
       }
 
-      // Fetch Attendances
-      const { data: attData } = await supabase.from('attendances').select('*, candidates(nama_lengkap, lokasi_penempatan)').order('created_at', { ascending: false });
+      // Fetch Absensi (JOIN dengan tabel employees untuk dapat nama)
+      const { data: attData } = await supabase.from('attendances').select('*, employees(nama_lengkap, lokasi_penempatan)').order('date', { ascending: false });
       if (attData) setAttendances(attData);
 
-      // Fetch Field Reports
-      const { data: repData } = await supabase.from('field_reports').select('*, candidates(nama_lengkap)').order('created_at', { ascending: false });
+      const { data: repData } = await supabase.from('field_reports').select('*, employees(nama_lengkap)').order('created_at', { ascending: false });
       if (repData) setFieldReports(repData);
 
-      // Fetch Tasks & Comments
       const { data: taskData } = await supabase.from('tasks').select('*, task_comments(*)').order('created_at', { ascending: false });
       if (taskData) {
         setTasks(taskData.map(t => ({
@@ -132,13 +116,22 @@ export default function ClientAdmin() {
         })));
       }
 
-      // Fetch Finance
       const { data: cfData } = await supabase.from('cashflows').select('*').order('created_at', { ascending: false });
       if (cfData) setCashflows(cfData);
+      
       const { data: pyData } = await supabase.from('payrolls').select('*').order('created_at', { ascending: false });
       if (pyData) setPayrolls(pyData);
+      
       const { data: invData } = await supabase.from('invoices').select('*').order('created_at', { ascending: false });
       if (invData) setInvoices(invData);
+
+      // Fetch Data Klien & Lokasi Absensi
+      const { data: clientDataRes } = await supabase.from('clients').select('*').order('name', { ascending: true });
+      if (clientDataRes) setClientsList(clientDataRes);
+
+      const { data: locData } = await supabase.from('office_locations').select('*');
+      if (locData) setOfficeLocations(locData);
+
     } catch (error) {
       console.error("Gagal menarik data:", error);
     }
@@ -152,7 +145,8 @@ export default function ClientAdmin() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const clientData = {
+  // Konfigurasi Bawaan UI App
+  const appConfig = {
     name: "PT Klien Nusantara",
     short: "KN",
     color: "bg-blue-600",
@@ -162,9 +156,8 @@ export default function ClientAdmin() {
 
   const formatRupiah = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka || 0);
 
-  // === FUNGSI LOGIKA (REAL DATABASE) ===
-  const activeEmployees = candidates.filter(c => c.status === 'INTI');
-  const employeesWithTaskAccess = activeEmployees.filter(c => c.hasTaskAccess);
+  const activeEmployees = employees.filter(e => e.status === 'INTI' || !e.status);
+  const employeesWithTaskAccess = activeEmployees.filter(e => e.hasTaskAccess);
 
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -174,14 +167,13 @@ export default function ClientAdmin() {
 
   const formatDateTime = (val) => val ? val.replace('T', ' ').substring(0, 16) : '-';
   const getNowStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
-  const getUserName = (id) => { if(id === currentUser.id) return currentUser.name; const c = candidates.find(u => u.id === id); return c ? c.nama_lengkap : 'Unknown'; };
+  const getUserName = (id) => { if(id === currentUser.id) return currentUser.name; const e = employees.find(u => u.id === id); return e ? e.nama_lengkap : 'Unknown'; };
   const getAssigneesNames = (assignedToArr) => assignedToArr.map(id => getUserName(id)).join(', ') || 'Belum Ada';
   const getStatusBadgeClass = (status) => {
     const colors = { 'pending': 'bg-slate-100 text-slate-600', 'in-progress': 'bg-blue-100 text-blue-700', 'done': 'bg-emerald-100 text-emerald-700' };
     return `px-2 py-0.5 rounded text-[9px] font-black uppercase shadow-sm ${colors[status] || colors.pending}`;
   };
 
-  // 1. Simpan Task Baru ke Supabase
   const handleCreateTask = async (e) => {
     e.preventDefault();
     if(newTask.assignedTo.length === 0) return alert("Pilih minimal satu penerima instruksi!");
@@ -207,7 +199,6 @@ export default function ClientAdmin() {
     }
   };
 
-  // 2. Update Status Task di Supabase
   const handleStatusUpdate = async (taskId, newStatus) => {
     const { error } = await supabase.from('tasks').update({ status: newStatus }).eq('id', taskId);
     if (!error) {
@@ -216,7 +207,6 @@ export default function ClientAdmin() {
     }
   };
 
-  // 3. Kirim Komentar Chat ke Supabase
   const handleAddComment = async (e) => {
     e.preventDefault();
     if (!newComment.trim() || !selectedTask) return;
@@ -233,43 +223,102 @@ export default function ClientAdmin() {
     }
   };
 
-  // 4. Update Hak Akses Task di Supabase
-  const toggleTaskAccess = async (employeeId) => {
-    const emp = candidates.find(c => c.id === employeeId);
-    const { error } = await supabase.from('candidates').update({ has_task_access: !emp.hasTaskAccess }).eq('id', employeeId);
-    if (!error) {
-      setCandidates(candidates.map(c => c.id === employeeId ? { ...c, hasTaskAccess: !c.hasTaskAccess } : c));
-    }
-  };
-
-  // 5. Update Hak Akses Mobile di Supabase
-  const toggleMobileAccess = async (employeeId) => {
-    const emp = candidates.find(c => c.id === employeeId);
-    const { error } = await supabase.from('candidates').update({ has_mobile_access: !emp.hasMobileAccess }).eq('id', employeeId);
-    if (!error) {
-      setCandidates(candidates.map(c => c.id === employeeId ? { ...c, hasMobileAccess: !c.hasMobileAccess } : c));
-    }
-  };
-
-  // 6. Fungsi Log Out Sistem
   const handleLogout = () => {
-    localStorage.removeItem('syntegra_user_session');
+    localStorage.removeItem('vest_user_session');
     navigate('/');
   };
 
-  // 7. Simpan Pengaturan Akses Pop-up Per User
   const handleSaveUserAccess = async () => {
-    // Di tahap asli, ini akan meng-update kolom 'permissions' JSONB di Supabase
-    alert(`Hak akses untuk ${selectedEmployeeAccess.nama_lengkap} berhasil disimpan secara spesifik!`);
-    setIsAccessModalOpen(false);
+    const { error } = await supabase
+      .from('employees')
+      .update({ permissions: editPermissions }) 
+      .eq('id', selectedEmployeeAccess.id);
+      
+    if (!error) {
+      alert(`Hak akses untuk ${selectedEmployeeAccess.nama_lengkap} berhasil tersimpan!`);
+      setIsAccessModalOpen(false);
+    } else {
+      alert("Gagal simpan: " + error.message);
+    }
+  };
+
+  // ==========================================
+  // FUNGSI CRUD KLIEN/CABANG & LOKASI (GEO-FENCING)
+  // ==========================================
+  const handleSaveClient = async (e) => {
+    e.preventDefault();
+    // Generate slug otomatis dari nama cabang
+    const generatedSlug = clientForm.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+    const payload = { name: clientForm.name, slug: generatedSlug, status: clientForm.status };
+    
+    if (clientForm.id) {
+      const { error } = await supabase.from('clients').update(payload).eq('id', clientForm.id);
+      if (!error) { alert('Cabang Klien diperbarui!'); fetchAllData(); setIsClientModalOpen(false); }
+      else alert('Gagal update cabang: ' + error.message);
+    } else {
+      const { error } = await supabase.from('clients').insert([payload]);
+      if (!error) { alert('Cabang Klien ditambahkan!'); fetchAllData(); setIsClientModalOpen(false); }
+      else alert('Gagal menambah cabang: ' + error.message);
+    }
+  };
+
+  const handleDeleteClient = async (id) => {
+    if (window.confirm("Hapus Klien/Cabang ini? Semua lokasi di dalamnya akan terpengaruh.")) {
+      const { error } = await supabase.from('clients').delete().eq('id', id);
+      if (!error) fetchAllData();
+      else alert("Gagal hapus klien. Pastikan titik lokasi di dalamnya sudah dihapus lebih dulu.");
+    }
+  };
+
+  const handleSaveLocation = async (e) => {
+    e.preventDefault();
+    const payload = { 
+      client_id: locationForm.client_id, // Menyambungkan ke ID Klien/Cabang
+      name: locationForm.name, 
+      latitude: parseFloat(locationForm.latitude), 
+      longitude: parseFloat(locationForm.longitude), 
+      radius: parseInt(locationForm.radius) 
+    };
+
+    if (locationForm.id) {
+      const { error } = await supabase.from('office_locations').update(payload).eq('id', locationForm.id);
+      if (!error) { alert('Lokasi berhasil diperbarui!'); fetchAllData(); setIsLocationModalOpen(false); }
+      else alert('Gagal update lokasi: ' + error.message);
+    } else {
+      const { error } = await supabase.from('office_locations').insert([payload]);
+      if (!error) { alert('Lokasi baru berhasil ditambahkan!'); fetchAllData(); setIsLocationModalOpen(false); }
+      else alert('Gagal menambah lokasi: ' + error.message);
+    }
+  };
+
+  const handleDeleteLocation = async (id) => {
+    if (window.confirm("Apakah Anda yakin ingin menghapus titik lokasi ini? Karyawan tidak akan bisa absen di area ini lagi.")) {
+      const { error } = await supabase.from('office_locations').delete().eq('id', id);
+      if (!error) fetchAllData();
+    }
+  };
+
+  const handleDeleteAbsen = async (id) => {
+    if (window.confirm("Hapus data absen ini permanen?")) {
+      const { error } = await supabase.from('attendances').delete().eq('id', id);
+      if (!error) fetchAllData();
+    }
+  };
+
+  const downloadTemplateAbsen = () => {
+    const csvContent = "data:text/csv;charset=utf-8,employee_id,date,check_in_time,check_out_time,location_gps,photo_url,status\nUID_KARYAWAN_DISINI,2026-07-06,08:00:00,17:00:00,Head Office,https://link-foto.com/foto.jpg,HADIR";
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "Template_Import_Absensi.csv");
+    document.body.appendChild(link);
+    link.click();
   };
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans overflow-hidden">
       
-      {/* ========================================================= */}
-      {/* 1. SIDEBAR DESKTOP                                        */}
-      {/* ========================================================= */}
+      {/* SIDEBAR */}
       <aside className={`hidden md:flex flex-col bg-white border-r border-slate-200 transition-all duration-300 ease-in-out relative z-20 ${isSidebarExpanded ? 'w-72' : 'w-20'}`}>
         <button onClick={() => setIsSidebarExpanded(!isSidebarExpanded)} className="absolute -right-3.5 top-8 bg-white border border-slate-200 rounded-full p-1 text-slate-400 hover:text-blue-600 shadow-sm z-30">
           {isSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
@@ -277,12 +326,12 @@ export default function ClientAdmin() {
 
         <div className={`h-24 flex items-center border-b border-slate-100 transition-all ${isSidebarExpanded ? 'px-6' : 'px-0 justify-center'}`}>
           <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 ${clientData.color} rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-blue-600/20 shrink-0`}>
-              {clientData.short}
+            <div className={`w-10 h-10 ${appConfig.color} rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-blue-600/20 shrink-0`}>
+              {appConfig.short}
             </div>
             {isSidebarExpanded && (
               <div className="overflow-hidden whitespace-nowrap fade-in">
-                <h1 className="font-bold text-slate-800 leading-tight">{clientData.name}</h1>
+                <h1 className="font-bold text-slate-800 leading-tight">{appConfig.name}</h1>
                 <p className="text-[10px] text-slate-500 font-medium">Admin Portal</p>
               </div>
             )}
@@ -299,15 +348,14 @@ export default function ClientAdmin() {
             { id: 'finance', icon: Wallet, label: 'Finance Dashboard' }
           ].map((item) => (
             <button key={item.id} 
-              // Tambahan validasi akses untuk staff
-              disabled={item.restricted && currentUser.role === 'staff' && !candidates.find(c => c.id === currentUser.id)?.hasTaskAccess}
+              disabled={item.restricted && currentUser.role === 'staff' && !employees.find(e => e.id === currentUser.id)?.hasTaskAccess}
               onClick={() => {setActiveMenu(item.id); setSelectedTask(null);}}
               className={`flex items-center w-full rounded-xl font-medium text-sm transition-all overflow-hidden whitespace-nowrap
-                ${activeMenu === item.id ? `${clientData.light} ${clientData.text}` : 'text-slate-600 hover:bg-slate-50'}
+                ${activeMenu === item.id ? `${appConfig.light} ${appConfig.text}` : 'text-slate-600 hover:bg-slate-50'}
                 ${isSidebarExpanded ? 'gap-3 px-4 py-3.5' : 'justify-center p-3.5'}
-                ${(item.restricted && currentUser.role === 'staff' && !candidates.find(c => c.id === currentUser.id)?.hasTaskAccess) ? 'opacity-30 cursor-not-allowed' : ''}
+                ${(item.restricted && currentUser.role === 'staff' && !employees.find(e => e.id === currentUser.id)?.hasTaskAccess) ? 'opacity-30 cursor-not-allowed' : ''}
               `}>
-              <item.icon size={20} className={`shrink-0 ${activeMenu === item.id ? clientData.text : 'text-slate-400'}`} />
+              <item.icon size={20} className={`shrink-0 ${activeMenu === item.id ? appConfig.text : 'text-slate-400'}`} />
               {isSidebarExpanded && <span>{item.label}</span>}
             </button>
           ))}
@@ -316,22 +364,19 @@ export default function ClientAdmin() {
             {isSidebarExpanded && <p className="px-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">System</p>}
             <button onClick={() => setActiveMenu('settings')} title={!isSidebarExpanded ? "Konfigurasi Akses" : ''}
               className={`flex items-center w-full rounded-xl font-medium text-sm transition-all overflow-hidden whitespace-nowrap
-                ${activeMenu === 'settings' ? `${clientData.light} ${clientData.text}` : 'text-slate-600 hover:bg-slate-50'}
+                ${activeMenu === 'settings' ? `${appConfig.light} ${appConfig.text}` : 'text-slate-600 hover:bg-slate-50'}
                 ${isSidebarExpanded ? 'gap-3 px-4 py-3.5' : 'justify-center p-3.5'}
               `}>
-              <Settings size={20} className={`shrink-0 ${activeMenu === 'settings' ? clientData.text : 'text-slate-400'}`} />
+              <Settings size={20} className={`shrink-0 ${activeMenu === 'settings' ? appConfig.text : 'text-slate-400'}`} />
               {isSidebarExpanded && <span>Konfigurasi Akses</span>}
             </button>
           </div>
         </nav>
       </aside>
 
-      {/* ========================================================= */}
-      {/* 2. AREA KONTEN UTAMA                                      */}
-      {/* ========================================================= */}
+      {/* KONTEN UTAMA */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
         
-        {/* --- Topbar Desktop --- */}
         <header className="hidden md:flex items-center justify-between px-8 py-4 bg-white border-b border-slate-200 z-10 shrink-0">
           <div className="relative w-96">
             <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -356,7 +401,7 @@ export default function ClientAdmin() {
               <div className="absolute top-14 right-0 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl py-2 fade-in z-50">
                 <div className="px-4 py-3 border-b border-slate-100 mb-2">
                   <p className="text-sm font-bold text-slate-800">Admin Utama</p>
-                  <p className="text-xs text-slate-500">{clientData.name}</p>
+                  <p className="text-xs text-slate-500">{appConfig.name}</p>
                 </div>
                 <button className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 flex items-center gap-3"><UserCircle size={18} className="text-slate-400"/> Profil Saya</button>
                 <button onClick={handleLogout} className="w-full text-left px-4 py-2.5 text-sm font-medium text-rose-600 hover:bg-rose-50 flex items-center gap-3 mt-1"><LogOut size={18} className="text-rose-400"/> Keluar Sistem</button>
@@ -365,14 +410,13 @@ export default function ClientAdmin() {
           </div>
         </header>
 
-        {/* --- Topbar Mobile --- */}
         <header className="md:hidden bg-blue-600 px-5 pt-10 pb-6 rounded-b-3xl shadow-md text-white z-10 shrink-0">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center font-bold text-blue-600 shadow-inner">{clientData.short}</div>
+              <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center font-bold text-blue-600 shadow-inner">{appConfig.short}</div>
               <div>
                 <p className="text-[10px] text-blue-200 uppercase tracking-widest font-semibold mb-0.5">Admin Portal</p>
-                <h1 className="font-bold text-lg leading-tight">{clientData.name}</h1>
+                <h1 className="font-bold text-lg leading-tight">{appConfig.name}</h1>
               </div>
             </div>
             <button className="relative p-2 bg-white/20 rounded-full backdrop-blur-sm">
@@ -382,30 +426,25 @@ export default function ClientAdmin() {
           </div>
         </header>
 
-        {/* --- Scrollable Content Area --- */}
         <div className="flex-1 overflow-y-auto p-4 pb-28 md:pb-8 md:p-8 bg-slate-50/50 custom-scrollbar">
           <div className="w-full"> 
 
-            {/* ========================================================= */}
-            {/* KONTEN: HRIS DASHBOARD                                      */}
-            {/* ========================================================= */}
+            {/* HRIS DASHBOARD */}
             {activeMenu === 'hris' && (
               <div className="space-y-6 fade-in">
                 
-                {/* 1. HEADER */}
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                   <div>
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight">HRIS & Recruitment</h2>
                     <p className="text-slate-500 text-sm mt-1">Kelola database karyawan, absensi, dan data pelamar baru.</p>
                   </div>
-                  <span className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 flex items-center gap-2 shadow-sm w-max"><Clock size={14}/> 5 Juli 2026</span>
+                  <span className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 flex items-center gap-2 shadow-sm w-max"><Clock size={14}/> Hari Ini</span>
                 </div>
 
-                {/* 2. OVERVIEW STAND BY (Di Luar Tab) */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6">
                   <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
                     <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Total Karyawan</p>
-                    <h3 className="text-2xl md:text-3xl font-black text-slate-800 mt-1 md:mt-2">{candidates.filter(c => c.status === 'INTI').length}</h3>
+                    <h3 className="text-2xl md:text-3xl font-black text-slate-800 mt-1 md:mt-2">{employees.length}</h3>
                     <p className="text-[10px] md:text-xs text-blue-600 font-medium mt-1">Berstatus Aktif</p>
                   </div>
                   <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
@@ -420,7 +459,6 @@ export default function ClientAdmin() {
                   </div>
                 </div>
 
-                {/* 3. NAVIGATION TABS (Overview Dihapus, QrForm Digabung) */}
                 <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
                   {[
                     { id: 'absensi', icon: CheckSquare, label: 'Data Absensi' },
@@ -434,7 +472,6 @@ export default function ClientAdmin() {
                   ))}
                 </div>
 
-                {/* 4. ISI TAB: ABSENSI (CRUD Lengkap) */}
                 {hrisTab === 'absensi' && (
                   <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden fade-in space-y-4 p-4 md:p-5">
                     <div className="flex flex-col md:flex-row justify-between gap-4 border-b border-slate-100 pb-4">
@@ -449,7 +486,6 @@ export default function ClientAdmin() {
                       <div className="flex flex-wrap gap-2 shrink-0">
                         <button onClick={downloadTemplateAbsen} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold transition-colors">Template Excel</button>
                         <button onClick={() => alert("Fitur Import CSV/Excel berjalan via backend parser.")} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-3 py-2 rounded-lg text-xs font-bold transition-colors">Import Data</button>
-                        <button onClick={() => { setAbsenForm({ id: null, employee_id: '', date: getNowStr().split('T')[0], check_in_time: '', check_out_time: '', location_gps: '', photo_url: '', status: 'HADIR' }); setIsAbsenModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-sm transition-colors">+ Input Manual</button>
                       </div>
                     </div>
                     
@@ -460,17 +496,20 @@ export default function ClientAdmin() {
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-sm">
                           {attendances.filter(a => {
-                            const matchNama = (a.candidates?.nama_lengkap || '').toLowerCase().includes(filterNama.toLowerCase());
+                            const matchNama = (a.employees?.nama_lengkap || '').toLowerCase().includes(filterNama.toLowerCase());
                             const matchLokasi = (a.location_gps || '').toLowerCase().includes(filterLokasi.toLowerCase());
                             const matchTanggal = filterTanggal === '' || a.date === filterTanggal;
                             return matchNama && matchLokasi && matchTanggal;
                           }).map(att => (
                             <tr key={att.id} className="hover:bg-slate-50">
                               <td className="px-6 py-4 font-bold text-slate-700">{att.date}</td>
-                              <td className="px-6 py-4 font-bold text-slate-800">{att.candidates?.nama_lengkap || 'Unknown'}</td>
+                              <td className="px-6 py-4 font-bold text-slate-800">{att.employees?.nama_lengkap || 'Karyawan Dihapus'}</td>
                               <td className="px-6 py-4">
                                 <span className="text-xs font-bold text-slate-500 block mb-1"><MapPin size={12} className="inline mr-1 text-blue-500"/>{att.location_gps}</span>
-                                {att.photo_url ? <a href={att.photo_url} target="_blank" rel="noreferrer" className="text-[10px] font-black text-blue-600 hover:underline bg-blue-50 px-2 py-0.5 rounded">Lihat Foto</a> : <span className="text-[10px] text-slate-400">Tanpa Foto</span>}
+                                <div className="flex gap-2 mt-1">
+                                  {att.photo_url ? <a href={att.photo_url} target="_blank" rel="noreferrer" className="text-[10px] font-black text-emerald-600 hover:underline bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">Foto IN</a> : <span className="text-[10px] text-slate-400 bg-slate-50 px-2 py-0.5 rounded">No IN</span>}
+                                  {att.photo_out_url ? <a href={att.photo_out_url} target="_blank" rel="noreferrer" className="text-[10px] font-black text-rose-600 hover:underline bg-rose-50 px-2 py-0.5 rounded border border-rose-100">Foto OUT</a> : <span className="text-[10px] text-slate-400 bg-slate-50 px-2 py-0.5 rounded">No OUT</span>}
+                                </div>
                               </td>
                               <td className="px-6 py-4">
                                 <span className="font-black text-emerald-600 block">IN: {att.check_in_time ? att.check_in_time.substring(0,5) : '--:--'}</span>
@@ -478,20 +517,18 @@ export default function ClientAdmin() {
                               </td>
                               <td className="px-6 py-4 text-center align-middle">
                                 <div className="flex justify-center gap-2">
-                                  <button onClick={() => { setAbsenForm({ id: att.id, employee_id: att.employee_id, date: att.date, check_in_time: att.check_in_time || '', check_out_time: att.check_out_time || '', location_gps: att.location_gps || '', photo_url: att.photo_url || '', status: att.status }); setIsAbsenModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"><FileText size={16}/></button>
                                   <button onClick={() => handleDeleteAbsen(att.id)} className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100 transition-colors"><Trash2 size={16}/></button>
                                 </div>
                               </td>
                             </tr>
                           ))}
-                          {attendances.length === 0 && <tr><td colSpan="5" className="text-center py-8 text-slate-400 font-bold">Belum ada data absensi.</td></tr>}
+                          {attendances.length === 0 && <tr><td colSpan="5" className="text-center py-8 text-slate-400 font-bold">Belum ada data absensi yang cocok.</td></tr>}
                         </tbody>
                       </table>
                     </div>
                   </div>
                 )}
 
-                {/* 5. ISI TAB: RECRUITMENT (Digabung dengan QR Form) */}
                 {hrisTab === 'recruitment' && (
                   <div className="space-y-6 fade-in">
                     <div className="bg-blue-600 p-6 md:p-8 rounded-2xl shadow-md text-white flex flex-col md:flex-row items-center justify-between gap-6">
@@ -531,7 +568,6 @@ export default function ClientAdmin() {
                   </div>
                 )}
                 
-                {/* 6. ISI TAB: DATABASE */}
                 {hrisTab === 'database' && (
                   <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden fade-in">
                     <div className="p-4 md:p-5 border-b border-slate-100 bg-blue-50/30 flex justify-between items-center">
@@ -543,11 +579,11 @@ export default function ClientAdmin() {
                           <tr><th className="px-6 py-4">Pegawai</th><th className="px-6 py-4">Divisi</th><th className="px-6 py-4">Penempatan</th></tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-sm">
-                          {candidates.filter(c => c.status === 'INTI').map(c => (
-                            <tr key={c.id} className="hover:bg-slate-50">
-                              <td className="px-6 py-4"><span className="font-bold text-slate-800 block">{c.nama_lengkap}</span></td>
-                              <td className="px-6 py-4"><span className="block font-bold text-slate-700">{c.bidang_jasa}</span></td>
-                              <td className="px-6 py-4"><span className="text-xs font-bold text-slate-700">{c.lokasi_penempatan}</span></td>
+                          {employees.map(e => (
+                            <tr key={e.id} className="hover:bg-slate-50">
+                              <td className="px-6 py-4"><span className="font-bold text-slate-800 block">{e.nama_lengkap}</span></td>
+                              <td className="px-6 py-4"><span className="block font-bold text-slate-700">{e.bidang_jasa}</span></td>
+                              <td className="px-6 py-4"><span className="text-xs font-bold text-slate-700">{e.lokasi_penempatan}</span></td>
                             </tr>
                           ))}
                         </tbody>
@@ -558,22 +594,16 @@ export default function ClientAdmin() {
               </div>
             )}
 
-            {/* ========================================================= */}
-            {/* KONTEN BARU: FINANCE DASHBOARD DENGAN SUB-NAVBAR          */}
-            {/* ========================================================= */}
+            {/* FINANCE DASHBOARD */}
             {activeMenu === 'finance' && (
               <div className="space-y-6 fade-in">
-                
-                {/* Header Utama Finance */}
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                   <div>
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Finance & Accounting</h2>
                     <p className="text-slate-500 text-sm mt-1">Kelola arus kas, penggajian, dan tagihan invoice perusahaan.</p>
                   </div>
-                  <span className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 flex items-center gap-2 shadow-sm w-max"><Clock size={14}/> 5 Juli 2026</span>
                 </div>
 
-                {/* Sub-Navbar Finance */}
                 <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
                   {[
                     { id: 'overview', icon: LayoutDashboard, label: 'Overview' },
@@ -591,25 +621,21 @@ export default function ClientAdmin() {
                   ))}
                 </div>
 
-                {/* --- TAB: OVERVIEW (EXECUTIVE SUMMARY) --- */}
                 {financeTab === 'overview' && (
                   <div className="space-y-6 fade-in">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {/* Saldo Kas */}
                       <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 shadow-lg flex flex-col justify-center relative overflow-hidden">
                         <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/20 blur-2xl rounded-full -translate-y-1/2 translate-x-1/2"></div>
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Saldo Kas Aktif</span>
                         <h3 className="text-3xl font-black text-emerald-400">Rp 45.500.000</h3>
                         <p className="text-[9px] text-slate-400 mt-3 border-t border-slate-800 pt-2 leading-relaxed">Total Pemasukan dikurangi Pengeluaran.</p>
                       </div>
-                      {/* Pemasukan */}
                       <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
                         <div className="absolute right-6 opacity-10"><TrendingUp size={48} className="text-blue-500"/></div>
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Pemasukan (Bulan Ini)</span>
                         <h3 className="text-2xl font-black text-slate-800">Rp 25.000.000</h3>
                         <p className="text-[9px] text-slate-500 mt-3 border-t border-slate-100 pt-2 leading-relaxed">Total Transaksi INCOME berstatus LUNAS.</p>
                       </div>
-                      {/* Pengeluaran */}
                       <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
                         <div className="absolute right-6 opacity-10"><TrendingDown size={48} className="text-red-500"/></div>
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Pengeluaran (Bulan Ini)</span>
@@ -617,173 +643,17 @@ export default function ClientAdmin() {
                         <p className="text-[9px] text-slate-500 mt-3 border-t border-slate-100 pt-2 leading-relaxed">Total Transaksi EXPENSE berstatus LUNAS.</p>
                       </div>
                     </div>
-
-                    {/* Grafik Simulasi (Bawaan Kode Asli) */}
-                    <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm">
-                      <h3 className="font-black text-slate-800 mb-6 flex items-center gap-2"><BarChart3 size={20} className="text-blue-500"/> Grafik Arus Kas (Bulan Terakhir)</h3>
-                      
-                      {/* CSS Based Bar Chart Placeholder */}
-                      <div className="flex items-end gap-4 h-48 pt-6 border-b border-slate-100 relative justify-around px-4">
-                          <div className="w-16 flex justify-center items-end gap-1 h-full">
-                            <div className="w-1/2 bg-blue-500 rounded-t-md h-[40%]"></div>
-                            <div className="w-1/2 bg-red-400 rounded-t-md h-[20%]"></div>
-                          </div>
-                          <div className="w-16 flex justify-center items-end gap-1 h-full">
-                            <div className="w-1/2 bg-blue-500 rounded-t-md h-[60%]"></div>
-                            <div className="w-1/2 bg-red-400 rounded-t-md h-[30%]"></div>
-                          </div>
-                          <div className="w-16 flex justify-center items-end gap-1 h-full">
-                            <div className="w-1/2 bg-blue-500 rounded-t-md h-[90%]"></div>
-                            <div className="w-1/2 bg-red-400 rounded-t-md h-[10%]"></div>
-                          </div>
-                      </div>
-                      <div className="flex justify-center gap-6 mt-6 pb-2">
-                        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-500"></span><span className="text-xs font-bold text-slate-600">Pemasukan</span></div>
-                        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-400"></span><span className="text-xs font-bold text-slate-600">Pengeluaran</span></div>
-                      </div>
-                    </div>
                   </div>
                 )}
-
-                {/* --- TAB: ARUS KAS (CASHFLOW) --- */}
-                {financeTab === 'cashflow' && (
-                  <div className="space-y-4 fade-in">
-                    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row items-center gap-2 justify-between">
-                       <div className="flex w-full md:w-1/2 items-center bg-slate-50 rounded-xl px-4 py-2 border border-slate-100 focus-within:border-emerald-300">
-                         <Search className="w-5 h-5 text-slate-400 shrink-0" />
-                         <input type="text" placeholder="Cari transaksi arus kas..." className="w-full bg-transparent border-none outline-none pl-3 text-sm font-bold text-slate-700" />
-                       </div>
-                       <button className="w-full md:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all">+ Input Manual</button>
-                    </div>
-
-                    <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full text-left">
-                          <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                            <tr>
-                              <th className="px-6 py-4">Tanggal</th>
-                              <th className="px-6 py-4">Kategori & Penempatan</th>
-                              <th className="px-6 py-4 text-center">Status</th>
-                              <th className="px-6 py-4 text-right">Nominal (Rp)</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-sm">
-                            {cashflows.map(item => (
-                              <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                                <td className="px-6 py-4 font-bold text-slate-700">{item.date}</td>
-                                <td className="px-6 py-4">
-                                  <span className="font-black text-slate-800 block">{item.category}</span>
-                                  <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 mt-1 inline-flex items-center gap-1"><MapPin size={10}/> {item.location}</span>
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${item.type === 'INCOME' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
-                                    {item.type === 'INCOME' ? 'Pemasukan' : 'Pengeluaran'}
-                                  </span>
-                                  {item.status === 'WAITING_APPROVAL' && <span className="block mt-1 text-[9px] font-black text-orange-600 animate-pulse">Menunggu Approval</span>}
-                                </td>
-                                <td className={`px-6 py-4 text-right font-black ${item.type === 'INCOME' ? 'text-blue-600' : 'text-red-600'}`}>
-                                  {item.type === 'INCOME' ? '+' : '-'}{formatRupiah(item.amount)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
+                {financeTab !== 'overview' && (
+                  <div className="bg-white p-8 rounded-2xl border border-slate-100 text-center text-slate-400 font-bold">
+                    Modul detail {financeTab} sedang disiapkan.
                   </div>
                 )}
-
-                {/* --- TAB: PAYROLL --- */}
-                {financeTab === 'payroll' && (
-                  <div className="space-y-4 fade-in">
-                    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row items-center gap-2 justify-between">
-                       <div className="flex w-full md:w-1/2 items-center bg-slate-50 rounded-xl px-4 py-2 border border-slate-100 focus-within:border-blue-300">
-                         <Search className="w-5 h-5 text-slate-400 shrink-0" />
-                         <input type="text" placeholder="Cari slip gaji karyawan..." className="w-full bg-transparent border-none outline-none pl-3 text-sm font-bold text-slate-700" />
-                       </div>
-                       <button className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all">+ Buat Slip Manual</button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                      {payrolls.map(slip => (
-                        <div key={slip.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm hover:border-blue-500 transition-all group flex flex-col justify-between">
-                          <div>
-                            <div className="flex justify-between items-start mb-4">
-                              <div className="bg-blue-50 text-blue-600 p-2.5 rounded-2xl group-hover:scale-110 transition-transform"><Building size={20}/></div>
-                              <span className={`px-2.5 py-1 rounded-md text-[9px] font-black uppercase tracking-widest shadow-sm ${slip.status === 'WAITING_APPROVAL' ? 'bg-orange-100 text-orange-700 animate-pulse' : 'bg-emerald-100 text-emerald-700'}`}>{slip.status.replace('_', ' ')}</span>
-                            </div>
-                            <h4 className="font-black text-slate-800 text-lg line-clamp-1">{slip.name}</h4>
-                            <p className="text-[10px] text-slate-500 font-bold mb-4">NIK: {slip.nik} • {slip.location}</p>
-                          </div>
-                          <div className="border-t border-slate-100 pt-4 flex justify-between items-center">
-                            <span className="text-[10px] font-black text-slate-400 uppercase">Take Home Pay</span>
-                            <span className="font-black text-blue-600 text-lg">{formatRupiah(slip.net_salary)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* --- TAB: INVOICE --- */}
-                {financeTab === 'invoice' && (
-                  <div className="space-y-4 fade-in">
-                    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row items-center gap-2 justify-between">
-                       <div className="flex w-full md:w-1/2 items-center bg-slate-50 rounded-xl px-4 py-2 border border-slate-100 focus-within:border-blue-300">
-                         <Search className="w-5 h-5 text-slate-400 shrink-0" />
-                         <input type="text" placeholder="Cari nomor invoice atau klien..." className="w-full bg-transparent border-none outline-none pl-3 text-sm font-bold text-slate-700" />
-                       </div>
-                       <button className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all">+ Terbitkan Invoice</button>
-                    </div>
-
-                    <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full text-left">
-                          <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                            <tr>
-                              <th className="px-6 py-4">Nomor Invoice</th>
-                              <th className="px-6 py-4">Klien & Lokasi</th>
-                              <th className="px-6 py-4">Tanggal (Terbit - Tempo)</th>
-                              <th className="px-6 py-4 text-center">Status</th>
-                              <th className="px-6 py-4 text-right">Total Tagihan</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-sm">
-                            {invoices.map(inv => (
-                              <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
-                                <td className="px-6 py-4 font-black text-slate-800">{inv.number}</td>
-                                <td className="px-6 py-4">
-                                  <span className="font-black text-slate-800 block">{inv.client}</span>
-                                  <span className="text-[10px] text-slate-500 font-medium inline-flex items-center gap-1 mt-1"><MapPin size={10}/> {inv.location}</span>
-                                </td>
-                                <td className="px-6 py-4">
-                                  <span className="text-[10px] font-bold text-slate-500 block mb-0.5">Terbit: {inv.issue_date}</span>
-                                  <span className="text-[10px] font-bold text-red-500">Tempo: {inv.due_date}</span>
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  {inv.status === 'SENT' ? (
-                                    <span className="px-2 py-0.5 bg-blue-100 text-blue-600 rounded text-[9px] font-black uppercase">Terkirim</span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 bg-emerald-100 text-emerald-600 rounded text-[9px] font-black uppercase">Lunas</span>
-                                  )}
-                                  <button className="mt-2 text-[9px] bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded font-bold text-slate-600 w-full">Detail</button>
-                                </td>
-                                <td className="px-6 py-4 text-right font-black text-slate-800">{formatRupiah(inv.amount)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
               </div>
             )}
 
-            {/* ========================================================= */}
-            {/* KONTEN UTAMA: TASK MANAGEMENT (TERINTEGRASI DATABASE HRIS)*/}
-            {/* ========================================================= */}
+            {/* TASK MANAGEMENT */}
             {activeMenu === 'task' && (
               <div className="flex flex-col h-full fade-in">
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6 shrink-0">
@@ -838,9 +708,7 @@ export default function ClientAdmin() {
               </div>
             )}
 
-            {/* ========================================================= */}
-            {/* KONTEN BARU: MENU LAPORAN & PENGAJUAN                     */}
-            {/* ========================================================= */}
+            {/* LAPORAN & PENGAJUAN */}
             {activeMenu === 'laporan' && (
               <div className="space-y-6 fade-in">
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -851,8 +719,7 @@ export default function ClientAdmin() {
                 </div>
                 <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
                   {[
-                    { id: 'patroli', label: 'Laporan Patroli' },
-                    { id: 'reguler', label: 'Laporan Reguler' },
+                    { id: 'laporan_lapangan', label: 'Laporan Patroli & Reguler' },
                     { id: 'cuti', label: 'Pengajuan Cuti/Izin' },
                     { id: 'koreksi', label: 'Perbaikan Absen' },
                     { id: 'reimburse', label: 'Reimbursement' },
@@ -864,33 +731,141 @@ export default function ClientAdmin() {
                   ))}
                 </div>
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                  <table className="w-full text-left">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                      <tr><th className="px-6 py-4">Tanggal Masuk</th><th className="px-6 py-4">Pelapor (Mobile App)</th><th className="px-6 py-4">Judul & Keterangan Laporan</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-sm">
-                      {fieldReports.filter(r => r.report_type.toLowerCase() === laporanTab).map(report => (
-                        <tr key={report.id} className="hover:bg-slate-50">
-                          <td className="px-6 py-4 font-bold text-slate-700">{new Date(report.created_at).toLocaleDateString('id-ID')}</td>
-                          <td className="px-6 py-4 font-bold text-slate-800">{report.candidates?.nama_lengkap || 'Unknown'}</td>
-                          <td className="px-6 py-4">
-                            <span className="font-bold text-blue-600 block">{report.title}</span>
-                            <span className="text-xs text-slate-500 mt-1 block max-w-md">{report.description}</span>
-                          </td>
-                        </tr>
-                      ))}
-                      {fieldReports.filter(r => r.report_type.toLowerCase() === laporanTab).length === 0 && (
-                        <tr><td colSpan="3" className="text-center py-8 text-slate-400 font-bold">Belum ada laporan {laporanTab} yang masuk dari Mobile App.</td></tr>
+                      {/* --- BARIS FILTER --- */}
+                      {laporanTab === 'laporan_lapangan' && (
+                        <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row gap-3">
+                          <div className="relative flex-1">
+                            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input type="text" placeholder="Cari Nama Karyawan..." value={filterReportName} onChange={e => setFilterReportName(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] transition-colors"/>
+                          </div>
+                          <input type="text" placeholder="Cari Judul Laporan..." value={filterReportTitle} onChange={e => setFilterReportTitle(e.target.value)} className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] transition-colors"/>
+                          <input type="date" value={filterReportDate} onChange={e => setFilterReportDate(e.target.value)} className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] text-slate-500 transition-colors"/>
+                          <select value={filterReportType} onChange={e => setFilterReportType(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] font-bold text-slate-600 transition-colors cursor-pointer">
+                            <option value="Semua">Semua Tipe</option>
+                            <option value="patroli">Khusus Patroli</option>
+                            <option value="reguler">Khusus Reguler</option>
+                          </select>
+                        </div>
                       )}
-                    </tbody>
-                  </table>
+
+                      {/* --- TABEL AKORDION --- */}
+                      <table className="w-full text-left">
+                        <thead className="bg-white border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                          <tr><th className="px-6 py-4 w-40">Tanggal Masuk</th><th className="px-6 py-4 w-56">Pelapor (Mobile App)</th><th className="px-6 py-4">Judul & Keterangan Laporan</th><th className="px-6 py-4 text-center w-24">Detail</th></tr>
+                        </thead>
+                        
+                        {(() => {
+                          // 1. Eksekusi Filter
+                          const filteredReports = fieldReports.filter(r => {
+                            if (laporanTab !== 'laporan_lapangan') return r.report_type.toLowerCase() === laporanTab;
+                            
+                            const matchTab = r.report_type === 'patroli' || r.report_type === 'reguler';
+                            const matchType = filterReportType === 'Semua' || r.report_type === filterReportType;
+                            const matchName = (r.employees?.nama_lengkap || '').toLowerCase().includes(filterReportName.toLowerCase());
+                            const matchTitle = (r.title || '').toLowerCase().includes(filterReportTitle.toLowerCase());
+                            const matchDate = filterReportDate === '' || r.created_at.startsWith(filterReportDate);
+
+                            return matchTab && matchType && matchName && matchTitle && matchDate;
+                          });
+
+                          // 2. Tampilan Jika Kosong
+                          if (filteredReports.length === 0) {
+                            return <tbody><tr><td colSpan="4" className="text-center py-12 text-slate-400 font-bold"><FileText size={32} className="mx-auto text-slate-200 mb-3"/>Tidak ada laporan yang cocok dengan filter.</td></tr></tbody>;
+                          }
+
+                          // 3. Render Data Akordion
+                          return filteredReports.map(report => {
+                            let parsedDesc = null;
+                            try { parsedDesc = JSON.parse(report.description); } catch (e) {}
+
+                            const isExpanded = expandedReportId === report.id;
+
+                            return (
+                              <tbody key={report.id} className="divide-y divide-slate-100 border-b border-slate-100 last:border-0">
+                                
+                                {/* --- BARIS UTAMA (Bisa Di-Klik) --- */}
+                                <tr onClick={() => setExpandedReportId(isExpanded ? null : report.id)} className={`hover:bg-slate-50 cursor-pointer transition-colors ${isExpanded ? 'bg-blue-50/20' : ''}`}>
+                                  <td className="px-6 py-4 align-top">
+                                    <span className="font-bold text-slate-700 block">{new Date(report.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                                    <span className="text-[10px] text-slate-500 font-bold mt-1.5 bg-slate-100 px-2.5 py-1 rounded-md inline-flex items-center gap-1"><Clock size={10}/> {new Date(report.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB</span>
+                                  </td>
+                                  
+                                  <td className="px-6 py-4 align-top font-bold text-slate-800">
+                                    <div className="flex items-center gap-3">
+                                      <div className="w-9 h-9 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-xs font-black shadow-inner shrink-0">
+                                        {report.employees?.nama_lengkap ? report.employees.nama_lengkap.substring(0,2).toUpperCase() : '??'}
+                                      </div>
+                                      <span>{report.employees?.nama_lengkap || 'Unknown'}</span>
+                                    </div>
+                                  </td>
+                                  
+                                  <td className="px-6 py-4 align-middle">
+                                    <span className="font-black text-blue-700 text-base flex items-center gap-2">
+                                      <ShieldAlert size={18} className="text-blue-500"/> {report.title}
+                                    </span>
+                                  </td>
+
+                                  <td className="px-6 py-4 align-middle text-center">
+                                    <button className={`p-2 rounded-full transition-all ${isExpanded ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 hover:bg-slate-200 text-slate-500'}`}>
+                                        <ChevronRight size={18} className={`transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                                    </button>
+                                  </td>
+                                </tr>
+                                
+                                {/* --- BARIS DETAIL (Terbuka Jika Di-Klik) --- */}
+                                {isExpanded && (
+                                  <tr className="bg-slate-50/30">
+                                    <td></td>
+                                    <td colSpan="3" className="px-6 py-6 pb-10 border-l-2 border-blue-200">
+                                      {parsedDesc ? (
+                                        <div className="space-y-5 max-w-4xl animate-in slide-in-from-top-4 fade-in duration-300">
+                                          {parsedDesc.notes && (
+                                            <div className="bg-amber-50/70 p-4 rounded-xl border border-amber-200 shadow-sm relative overflow-hidden">
+                                              <div className="absolute top-0 right-0 w-32 h-32 bg-amber-300/20 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2"></div>
+                                              <span className="text-[10px] font-black text-amber-700 uppercase tracking-widest block mb-2">Kesimpulan Situasi:</span>
+                                              <p className="text-sm text-slate-800 font-medium leading-relaxed relative z-10">{parsedDesc.notes}</p>
+                                            </div>
+                                          )}
+                                          
+                                          {parsedDesc.photos && parsedDesc.photos.length > 0 && (
+                                            <div className="flex flex-wrap gap-4">
+                                              {parsedDesc.photos.map((p, i) => (
+                                                <div key={i} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col w-56 group">
+                                                  <div className="relative h-44 bg-slate-100 overflow-hidden">
+                                                    <img src={p.url} alt="Lampiran" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                                                    <div className="absolute inset-0 bg-gradient-to-t from-[#0a195c]/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center p-3">
+                                                      <a href={p.url} target="_blank" rel="noreferrer" className="text-xs font-bold text-white flex items-center gap-1 hover:underline"><ArrowUpRight size={14}/> Buka Full</a>
+                                                    </div>
+                                                  </div>
+                                                  <div className="p-3 bg-white">
+                                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1"><Camera size={12}/> Lampiran {i+1}</p>
+                                                    <p className="text-[11px] text-slate-700 font-medium leading-snug">
+                                                      {p.desc || <span className="italic text-slate-400">Tidak ada keterangan lampiran.</span>}
+                                                    </p>
+                                                  </div>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm inline-block max-w-xl animate-in slide-in-from-top-4 fade-in">
+                                          <span className="text-sm text-slate-600 leading-relaxed font-medium">{report.description}</span>
+                                        </div>
+                                      )}
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            );
+                          });
+                        })()}
+                      </table>
+                    </div>
                 </div>
-              </div>
             )}
 
-            {/* ========================================================= */}
-            {/* KONTEN: PENGATURAN AKSES & SISTEM (GROUPED)                 */}
-            {/* ========================================================= */}
+            {/* PENGATURAN AKSES & SISTEM (CLIENT & GEO-FENCING UPDATED) */}
             {activeMenu === 'settings' && (
               <div className="space-y-6 fade-in">
                 <div>
@@ -900,26 +875,26 @@ export default function ClientAdmin() {
 
                 <div className="flex gap-2 border-b border-slate-200 pb-px">
                    <button onClick={() => setSettingTab('user_access')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'user_access' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Akses Per Pegawai</button>
-                   <button onClick={() => setSettingTab('role_access')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'role_access' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Akses Per Jabatan</button>
                    <button onClick={() => setSettingTab('gps_rules')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'gps_rules' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Aturan GPS & Absensi</button>
                 </div>
 
                 {settingTab === 'user_access' && (
                   <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
-                    <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                       <h3 className="font-bold text-slate-700">Daftar Pegawai (Klik Atur Akses untuk memunculkan Pop-up)</h3>
-                    </div>
                     <table className="w-full text-left">
                       <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                        <tr><th className="px-6 py-4">Nama Pegawai & NIK</th><th className="px-6 py-4">Jabatan</th><th className="px-6 py-4 text-center">Tindakan</th></tr>
+                        <tr><th className="px-6 py-4">Nama Pegawai</th><th className="px-6 py-4 text-center">Tindakan</th></tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-sm">
                         {activeEmployees.map(emp => (
                           <tr key={emp.id} className="hover:bg-slate-50">
-                            <td className="px-6 py-4"><span className="font-bold text-slate-800 block">{emp.nama_lengkap}</span><span className="text-[10px] text-slate-500">{emp.nik_karyawan}</span></td>
-                            <td className="px-6 py-4 font-bold text-slate-600">{emp.posisi_jabatan}</td>
+                            <td className="px-6 py-4"><span className="font-bold text-slate-800 block">{emp.nama_lengkap}</span></td>
                             <td className="px-6 py-4 text-center">
-                               <button onClick={() => { setSelectedEmployeeAccess(emp); setIsAccessModalOpen(true); }} className="px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg text-xs font-bold transition-colors">Atur Akses Detail</button>
+                               <button onClick={() => { 
+                                 setSelectedEmployeeAccess(emp); 
+                                 const perms = typeof emp.permissions === 'string' ? JSON.parse(emp.permissions) : (emp.permissions || {});
+                                 setEditPermissions({ patroli: !!perms.patroli, reguler: !!perms.reguler, cuti: !!perms.cuti, koreksi: !!perms.koreksi, reimburse: !!perms.reimburse, bebas_gps: !!perms.bebas_gps });
+                                 setIsAccessModalOpen(true); 
+                               }} className="px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg text-xs font-bold transition-colors">Atur Akses</button>
                             </td>
                           </tr>
                         ))}
@@ -928,43 +903,95 @@ export default function ClientAdmin() {
                   </div>
                 )}
 
-                {settingTab === 'role_access' && (
-                  <div className="bg-white p-8 rounded-2xl border border-slate-100 text-center text-slate-400 font-bold">
-                    Fitur pemetaan akses masal berdasarkan Master Jabatan sedang disiapkan.
-                  </div>
-                )}
-
+                {/* MANAJEMEN LOKASI BERCABANG (GEO-FENCING MENGGUNAKAN TABEL CLIENTS) */}
                 {settingTab === 'gps_rules' && (
-                  <div className="bg-white p-6 rounded-2xl border border-slate-200 max-w-xl space-y-6">
-                     <h3 className="font-bold text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2"><MapPin size={18} className="text-rose-500"/> Parameter Geo-Fencing Absensi</h3>
-                     <div>
-                       <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Batas Toleransi Radius (Meter)</label>
-                       <input type="number" defaultValue={50} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-blue-500 font-bold" />
-                       <p className="text-[10px] text-slate-500 mt-2">Jarak maksimal karyawan dari titik kordinat yang ditentukan agar tombol absen bisa ditekan.</p>
-                     </div>
-                     <button className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl hover:bg-slate-900 transition-colors">Simpan Aturan Global</button>
+                  <div className="space-y-6 fade-in">
+                    <div className="flex justify-between items-center bg-blue-50 p-4 rounded-xl border border-blue-100">
+                      <div>
+                        <h3 className="font-bold text-blue-900 flex items-center gap-2"><FolderTree size={18}/> Hierarki Klien & Titik Absensi</h3>
+                        <p className="text-xs text-blue-700 mt-1">Buat Cabang Klien, lalu tambahkan titik lokasi (Geo-Fencing) di dalam cabang tersebut.</p>
+                      </div>
+                      <button onClick={() => { setClientForm({ id: null, name: '', status: 'ACTIVE' }); setIsClientModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-2 shrink-0">
+                        <Plus size={16}/> Tambah Cabang Klien
+                      </button>
+                    </div>
+                    
+                    {/* Render Setiap Klien/Cabang menjadi Tabel Tersendiri */}
+                    {clientsList.map(client => (
+                      <div key={client.id} className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+                        <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          <h3 className="font-black text-slate-700 text-base flex items-center gap-2">
+                            <Building size={16} className="text-slate-400"/> {client.name}
+                          </h3>
+                          <div className="flex gap-2">
+                             <button onClick={() => { setClientForm({ id: client.id, name: client.name, status: client.status }); setIsClientModalOpen(true); }} className="text-slate-500 hover:text-blue-600 text-xs font-bold bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm">Edit Cabang</button>
+                             <button onClick={() => { setLocationForm({ id: null, client_id: client.id, name: '', latitude: '', longitude: '', radius: 50 }); setIsLocationModalOpen(true); }} className="bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1">
+                               <Plus size={14}/> Tambah Titik di Sini
+                             </button>
+                          </div>
+                        </div>
+                        
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left">
+                            <thead className="bg-white border-b border-slate-100 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                              <tr>
+                                <th className="px-6 py-4">Nama Titik Lokasi</th>
+                                <th className="px-6 py-4">Titik Koordinat (Lat, Lng)</th>
+                                <th className="px-6 py-4">Batas Radius</th>
+                                <th className="px-6 py-4 text-center">Aksi</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 text-sm bg-white">
+                              {/* Filter titik lokasi yang sesuai dengan ID Klien/Cabang ini */}
+                              {officeLocations.filter(loc => loc.client_id === client.id).map(loc => (
+                                <tr key={loc.id} className="hover:bg-slate-50 transition-colors">
+                                  <td className="px-6 py-4 font-bold text-slate-700"><MapPin size={14} className="inline mr-2 text-slate-400"/>{loc.name}</td>
+                                  <td className="px-6 py-4 font-medium text-slate-500 font-mono text-xs">{loc.latitude}, {loc.longitude}</td>
+                                  <td className="px-6 py-4 font-black text-emerald-600">{loc.radius} Meter</td>
+                                  <td className="px-6 py-4 text-center">
+                                    <div className="flex justify-center gap-2">
+                                      <button onClick={() => { setLocationForm(loc); setIsLocationModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><FileText size={16}/></button>
+                                      <button onClick={() => handleDeleteLocation(loc.id)} className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100"><Trash2 size={16}/></button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                              {officeLocations.filter(loc => loc.client_id === client.id).length === 0 && (
+                                <tr><td colSpan="4" className="text-center py-6 text-slate-400 font-bold text-xs bg-slate-50/50">Klien ini belum memiliki titik lokasi absen.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ))}
+
+                    {clientsList.length === 0 && (
+                       <div className="text-center py-16 bg-white border border-slate-200 border-dashed rounded-3xl">
+                          <FolderTree size={48} className="mx-auto text-slate-300 mb-4"/>
+                          <h3 className="text-slate-500 font-bold">Belum Ada Klien/Cabang</h3>
+                          <p className="text-xs text-slate-400 mt-1 mb-4">Mulai dengan membuat cabang/klien pertama Anda.</p>
+                          <button onClick={() => { setClientForm({ id: null, name: '', status: 'ACTIVE' }); setIsClientModalOpen(true); }} className="bg-blue-600 text-white px-5 py-2 rounded-xl text-sm font-bold shadow-sm inline-flex items-center gap-2"><Plus size={16}/> Buat Klien Baru</button>
+                       </div>
+                    )}
                   </div>
                 )}
               </div>
             )}
-
             </div>
         </div>
 
         {/* ========================================================= */}
-        {/* MODAL 1: BUAT TUGAS BARU                                  */}
+        {/* SEMUA MODAL POP-UP                                        */}
         {/* ========================================================= */}
+        
+        {/* 1. MODAL TUGAS BARU */}
         {isTaskModalOpen && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[80] flex justify-center items-end md:items-center md:p-4">
             <div className="bg-white w-full h-[90vh] md:h-auto md:max-w-2xl rounded-t-[2rem] md:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-full md:zoom-in duration-300 relative">
               <div className="px-6 py-5 border-b border-blue-600 bg-blue-600 text-white flex justify-between items-center shrink-0">
-                <div>
-                  <h3 className="font-black text-lg">Buat Tugas Baru</h3>
-                  <p className="text-[10px] text-blue-200 mt-0.5">Penerima tugas ditarik otomatis dari Karyawan INTI.</p>
-                </div>
+                <div><h3 className="font-black text-lg">Buat Tugas Baru</h3></div>
                 <button type="button" onClick={() => setIsTaskModalOpen(false)} className="bg-white/10 p-2 rounded-full hover:bg-white/20"><X size={18}/></button>
               </div>
-              
               <form onSubmit={handleCreateTask} className="flex flex-col flex-1 min-h-0">
                 <div className="p-6 md:p-8 overflow-y-auto space-y-5 custom-scrollbar flex-1">
                   <div>
@@ -984,22 +1011,14 @@ export default function ClientAdmin() {
                   <div>
                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 flex items-center justify-between">
                       <span>Pilih Karyawan Penerima Tugas</span>
-                      <span className="text-blue-500 font-bold normal-case">Tersedia: {employeesWithTaskAccess.length} Karyawan</span>
                     </label>
                     <div className="max-h-40 overflow-y-auto border-2 border-slate-200 rounded-xl p-3 bg-slate-50 space-y-1 custom-scrollbar">
-                      {employeesWithTaskAccess.length === 0 ? (
-                        <p className="text-xs text-slate-400 font-bold text-center py-4">Tidak ada karyawan yang memiliki akses tugas.</p>
-                      ) : (
-                        employeesWithTaskAccess.map(emp => (
-                          <label key={emp.id} className="flex items-center gap-3 p-3 bg-white border border-slate-100 hover:border-blue-300 rounded-lg cursor-pointer shadow-sm transition-all">
-                            <input type="checkbox" checked={newTask.assignedTo.includes(emp.id)} onChange={(e) => setNewTask(p => ({ ...p, assignedTo: e.target.checked ? [...p.assignedTo, emp.id] : p.assignedTo.filter(id => id !== emp.id) }))} className="w-4 h-4 text-blue-600 rounded border-slate-300" />
-                            <div className="flex-1">
-                              <span className="text-sm font-bold text-slate-800 block">{emp.nama_lengkap}</span>
-                              <span className="text-[10px] text-slate-500 font-medium">{emp.bidang_jasa} • {emp.lokasi_penempatan}</span>
-                            </div>
-                          </label>
-                        ))
-                      )}
+                      {employeesWithTaskAccess.map(emp => (
+                        <label key={emp.id} className="flex items-center gap-3 p-3 bg-white border border-slate-100 hover:border-blue-300 rounded-lg cursor-pointer shadow-sm transition-all">
+                          <input type="checkbox" checked={newTask.assignedTo.includes(emp.id)} onChange={(e) => setNewTask(p => ({ ...p, assignedTo: e.target.checked ? [...p.assignedTo, emp.id] : p.assignedTo.filter(id => id !== emp.id) }))} className="w-4 h-4 text-blue-600 rounded border-slate-300" />
+                          <div className="flex-1"><span className="text-sm font-bold text-slate-800 block">{emp.nama_lengkap}</span></div>
+                        </label>
+                      ))}
                     </div>
                   </div>
                   <div>
@@ -1009,53 +1028,55 @@ export default function ClientAdmin() {
                 </div>
                 <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-end gap-3 shrink-0 pb-10 md:pb-5">
                   <button type="button" onClick={() => setIsTaskModalOpen(false)} className="px-5 py-3 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Batal</button>
-                  <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 transition-all hover:-translate-y-0.5 flex items-center gap-2">Kirim Tugas Sekarang</button>
+                  <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20">Kirim Tugas</button>
                 </div>
               </form>
             </div>
           </div>
         )}
-        
-        {/* ========================================================= */}
-        {/* MODAL PENGATURAN AKSES PER USER (POP-UP)                    */}
-        {/* ========================================================= */}
+
+        {/* 2. MODAL PENGATURAN AKSES USER */}
         {isAccessModalOpen && selectedEmployeeAccess && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[80] flex justify-center items-center p-4">
             <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
               <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                <div>
-                  <h3 className="font-black text-lg text-slate-800">Manajer Akses User</h3>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{selectedEmployeeAccess.nama_lengkap}</p>
-                </div>
+                <div><h3 className="font-black text-lg text-slate-800">Manajer Akses User</h3></div>
                 <button onClick={() => setIsAccessModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
               </div>
               <div className="p-6 space-y-6 overflow-y-auto max-h-[60vh] custom-scrollbar">
-                
-                {/* Akses Modul Aplikasi */}
+                {/* Otoritas Menu Mobile App */}
                 <div>
-                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Modul Mobile App</h4>
-                  <div className="space-y-3">
-                    {['Laporan Patroli', 'Laporan Reguler', 'Cuti & Izin', 'Koreksi Absen', 'Reimbursement'].map(modul => (
-                      <label key={modul} className="flex items-center justify-between p-3 border border-slate-100 rounded-xl hover:border-blue-200 cursor-pointer transition-colors bg-white">
-                        <span className="text-sm font-bold text-slate-700">{modul}</span>
-                        <input type="checkbox" defaultChecked={true} className="w-5 h-5 text-blue-600 rounded-md border-slate-300 focus:ring-blue-500" />
-                      </label>
-                    ))}
+                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Akses Menu Laporan</h4>
+                  <div className="space-y-2">
+                    <label className="flex items-center justify-between p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
+                      <span className="text-sm font-bold text-slate-700">Laporan Reguler</span>
+                      <input type="checkbox" checked={editPermissions.reguler} onChange={(e) => setEditPermissions({...editPermissions, reguler: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300" />
+                    </label>
+                    
+                    <label className="flex items-center justify-between p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
+                      <span className="text-sm font-bold text-slate-700">Laporan Patroli</span>
+                      <input type="checkbox" checked={editPermissions.patroli} onChange={(e) => setEditPermissions({...editPermissions, patroli: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300" />
+                    </label>
+
+                    <label className="flex items-center justify-between p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
+                      <span className="text-sm font-bold text-slate-700">Reimbursement</span>
+                      <input type="checkbox" checked={editPermissions.reimburse} onChange={(e) => setEditPermissions({...editPermissions, reimburse: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300" />
+                    </label>
                   </div>
                 </div>
 
-                {/* Akses Khusus / Bypass */}
+                {/* Otoritas Khusus */}
                 <div>
                   <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Otoritas Khusus</h4>
                   <label className="flex items-center justify-between p-3 border border-amber-200 bg-amber-50/50 rounded-xl cursor-pointer transition-colors">
                     <div>
                       <span className="text-sm font-bold text-amber-900 block">Bypass Area GPS Absensi</span>
-                      <span className="text-[10px] text-amber-700 leading-tight block mt-0.5">Pegawai ini bisa absen dari lokasi mana saja tanpa terblokir radius.</span>
+                      <span className="text-[10px] text-amber-700 leading-tight block mt-0.5">Bisa absen dari lokasi mana saja tanpa terblokir radius.</span>
                     </div>
-                    <input type="checkbox" className="w-5 h-5 text-amber-600 rounded-md border-amber-300 focus:ring-amber-500" />
+                    {/* Perbaikan onChange pada checkbox GPS */}
+                    <input type="checkbox" checked={editPermissions.bebas_gps} onChange={(e) => setEditPermissions({...editPermissions, bebas_gps: e.target.checked})} className="w-5 h-5 text-amber-600 rounded-md border-amber-300" />
                   </label>
                 </div>
-
               </div>
               <div className="p-5 border-t border-slate-100 bg-white">
                 <button onClick={handleSaveUserAccess} className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20">Simpan Konfigurasi</button>
@@ -1064,94 +1085,99 @@ export default function ClientAdmin() {
           </div>
         )}
 
-        {/* ========================================================= */}
-        {/* MODAL 2: DETAIL TUGAS & DISKUSI (POP-UP)                    */}
-        {/* ========================================================= */}
-        {selectedTask && (
-          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[90] flex justify-center items-end md:items-center md:p-8">
-            <div className="w-full h-[90vh] md:max-w-5xl md:h-[85vh] bg-slate-100 rounded-t-[2rem] md:rounded-[2rem] shadow-2xl flex flex-col md:flex-row overflow-hidden animate-in zoom-in-95 duration-300">
-              <div className="w-full md:w-1/2 flex flex-col bg-white border-r border-slate-200 h-1/2 md:h-full">
-                <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-white z-10 shrink-0">
-                  <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><FileText size={18} className="text-blue-500"/> Info Pekerjaan</h3>
-                  <button type="button" onClick={() => setSelectedTask(null)} className="p-1.5 bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-500 rounded-full transition-colors md:hidden"><X size={18} /></button>
+        {/* 3. MODAL TAMBAH/EDIT CABANG (MENGGUNAKAN TABEL CLIENTS) */}
+        {isClientModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex justify-center items-center p-4">
+            <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
+              <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><Building size={20} className="text-blue-600"/> {clientForm.id ? 'Edit Cabang' : 'Cabang Klien Baru'}</h3>
+                <button type="button" onClick={() => setIsClientModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
+              </div>
+              <form onSubmit={handleSaveClient} className="flex flex-col">
+                <div className="p-6 bg-white">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Nama Cabang / Klien</label>
+                  <input required type="text" placeholder="Cth: PT Klien Maju Mundur" value={clientForm.name} onChange={e => setClientForm({...clientForm, name: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
                 </div>
-                <div className="p-6 overflow-y-auto flex-1 space-y-6 custom-scrollbar">
-                  <div>
-                    <div className="flex gap-2 mb-3">
-                      <span className={getStatusBadgeClass(selectedTask.status)}>{selectedTask.status.replace('-', ' ')}</span>
-                    </div>
-                    <h2 className="text-2xl font-black text-slate-900 leading-tight">{selectedTask.title}</h2>
-                    <div className="grid grid-cols-2 gap-4 mt-6 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <div><span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">Penerima Tugas</span><span className="text-xs font-bold text-blue-600">{getAssigneesNames(selectedTask.assignedTo)}</span></div>
-                      <div><span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">Diberikan Oleh</span><span className="text-xs font-bold text-slate-700">{getUserName(selectedTask.assignedBy)}</span></div>
-                      <div className="col-span-2 pt-2 border-t border-slate-200"><span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">Batas Waktu (Deadline)</span><span className="text-sm font-black text-red-600 flex items-center gap-1.5"><Clock size={14}/> {formatDateTime(selectedTask.dueDate)}</span></div>
-                    </div>
-                    <div className="mt-6 text-slate-700 text-sm leading-relaxed font-medium p-4 bg-yellow-50/50 border border-yellow-100 rounded-xl">
-                      <span className="block text-[10px] font-black text-yellow-600 uppercase tracking-widest mb-2">Instruksi:</span>{selectedTask.description}
-                    </div>
-                  </div>
-                  <div className="mt-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Update Status Laporan</label>
-                    <select value={selectedTask.status} onChange={(e) => handleStatusUpdate(selectedTask.id, e.target.value)} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm font-bold bg-slate-50 focus:bg-white transition-colors cursor-pointer outline-none">
-                      <option value="pending">Pending (Belum Dikerjakan)</option><option value="in-progress">In Progress (Sedang Diproses)</option><option value="done">Done (Selesai)</option>
-                    </select>
+                <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-between gap-3">
+                  {clientForm.id ? (
+                     <button type="button" onClick={() => handleDeleteClient(clientForm.id)} className="px-4 py-3 text-rose-500 hover:bg-rose-100 rounded-xl font-bold text-sm transition-colors">Hapus</button>
+                  ) : <div></div>}
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setIsClientModalOpen(false)} className="px-5 py-3 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Batal</button>
+                    <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20">Simpan</button>
                   </div>
                 </div>
-              </div>
-
-              <div className="w-full md:w-1/2 flex flex-col bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-slate-100 h-1/2 md:h-full relative">
-                <div className="px-6 py-5 border-b border-slate-200 flex justify-between items-center bg-white/90 backdrop-blur-md z-10 shrink-0">
-                  <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><MessageSquare size={18} className="text-blue-500" /> Diskusi Tim</h3>
-                  <button type="button" onClick={() => setSelectedTask(null)} className="hidden md:block p-1.5 bg-slate-100 text-slate-600 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"><X size={18} /></button>
-                </div>
-                <div className="flex-1 p-5 overflow-y-auto space-y-4 custom-scrollbar">
-                  {(selectedTask.comments || []).length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-400"><p className="text-xs font-bold uppercase tracking-widest">Belum ada diskusi</p></div>
-                  ) : (
-                    selectedTask.comments.map((chat, idx) => {
-                      const isMe = String(chat.userId) === String(currentUser.id);
-                      return (
-                        <div key={idx} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                          <div className={`p-3 md:p-4 rounded-2xl shadow-sm max-w-[85%] ${isMe ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none'}`}>
-                            <p className="text-[11px] md:text-sm font-medium leading-relaxed">{chat.text}</p>
-                          </div>
-                          <span className="text-[8px] md:text-[10px] font-black tracking-widest text-slate-400 mt-1 px-1 uppercase">{isMe ? 'Anda' : getUserName(chat.userId)} • {chat.timestamp}</span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-                <div className="p-4 md:p-5 bg-white border-t border-slate-200 pb-10 md:pb-5 shrink-0 shadow-[0_-10px_20px_rgba(0,0,0,0.03)]">
-                  <form onSubmit={handleAddComment} className="flex gap-2 items-center">
-                    <input type="text" value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Ketik laporan atau balasan..." className="flex-1 px-4 py-3.5 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 text-sm bg-slate-50 focus:bg-white font-bold transition-colors" />
-                    <button type="submit" disabled={!newComment.trim()} className="bg-blue-600 text-white p-3.5 rounded-xl hover:bg-blue-700 disabled:opacity-50 shadow-md shrink-0 transition-transform active:scale-95"><Send size={20} className="ml-0.5" /></button>
-                  </form>
-                </div>
-              </div>
+              </form>
             </div>
           </div>
         )}
+
+        {/* 4. MODAL TAMBAH/EDIT LOKASI GEO-FENCING */}
+        {isLocationModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex justify-center items-center p-4">
+            <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
+              <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><MapPin size={20} className="text-blue-600"/> {locationForm.id ? 'Edit Titik Lokasi' : 'Tambah Titik Baru'}</h3>
+                <button type="button" onClick={() => setIsLocationModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
+              </div>
+              <form onSubmit={handleSaveLocation} className="flex flex-col">
+                <div className="p-6 space-y-5 overflow-y-auto bg-white max-h-[70vh]">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Titik Untuk Cabang/Klien:</label>
+                    <div className="px-4 py-3 border-2 border-blue-100 bg-blue-50 text-blue-800 rounded-xl text-sm font-bold truncate">
+                      {clientsList.find(c => c.id === locationForm.client_id)?.name || 'Klien Tidak Ditemukan'}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Nama Titik Lokasi</label>
+                    <input required type="text" placeholder="Cth: Pintu Utama Barat" value={locationForm.name} onChange={e => setLocationForm({...locationForm, name: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Latitude</label>
+                      <input required type="number" step="any" placeholder="-6.200000" value={locationForm.latitude} onChange={e => setLocationForm({...locationForm, latitude: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Longitude</label>
+                      <input required type="number" step="any" placeholder="106.816666" value={locationForm.longitude} onChange={e => setLocationForm({...locationForm, longitude: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Batas Radius Absensi (Meter)</label>
+                    <div className="relative">
+                      <input required type="number" min="10" placeholder="50" value={locationForm.radius} onChange={e => setLocationForm({...locationForm, radius: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all pr-16"/>
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">METER</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+                  <button type="button" onClick={() => setIsLocationModalOpen(false)} className="px-5 py-3 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Batal</button>
+                  <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20">Simpan Titik</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
       </main>
 
-      {/* ========================================================= */}
-      {/* 3. MOBILE BOTTOM NAVIGATION                                 */}
-      {/* ========================================================= */}
+      {/* MOBILE BOTTOM NAVIGATION */}
       <nav className="md:hidden fixed bottom-0 w-full bg-white border-t border-slate-200 flex justify-around items-center px-2 py-3 pb-6 z-40 shadow-[0_-4px_20px_-10px_rgba(0,0,0,0.1)]">
-        <button onClick={() => setActiveMenu('hris')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'hris' ? clientData.text : 'text-slate-400'}`}>
-          <div className={`p-1.5 rounded-xl ${activeMenu === 'hris' ? clientData.light : 'bg-transparent'}`}><Users size={22} className={activeMenu === 'hris' ? `fill-blue-100 ${clientData.text}` : ''} /></div>
-          <span className={`text-[10px] font-bold ${activeMenu === 'hris' ? clientData.text : 'font-medium'}`}>HRIS</span>
+        <button onClick={() => setActiveMenu('hris')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'hris' ? appConfig.text : 'text-slate-400'}`}>
+          <div className={`p-1.5 rounded-xl ${activeMenu === 'hris' ? appConfig.light : 'bg-transparent'}`}><Users size={22} className={activeMenu === 'hris' ? `fill-blue-100 ${appConfig.text}` : ''} /></div>
+          <span className={`text-[10px] font-bold ${activeMenu === 'hris' ? appConfig.text : 'font-medium'}`}>HRIS</span>
         </button>
-        <button onClick={() => setActiveMenu('task')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'task' ? clientData.text : 'text-slate-400'}`}>
-          <div className={`p-1.5 rounded-xl ${activeMenu === 'task' ? clientData.light : 'bg-transparent'}`}><CheckSquare size={22} className={activeMenu === 'task' ? `fill-blue-100 ${clientData.text}` : ''} /></div>
-          <span className={`text-[10px] font-bold ${activeMenu === 'task' ? clientData.text : 'font-medium'}`}>Task</span>
+        <button onClick={() => setActiveMenu('task')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'task' ? appConfig.text : 'text-slate-400'}`}>
+          <div className={`p-1.5 rounded-xl ${activeMenu === 'task' ? appConfig.light : 'bg-transparent'}`}><CheckSquare size={22} className={activeMenu === 'task' ? `fill-blue-100 ${appConfig.text}` : ''} /></div>
+          <span className={`text-[10px] font-bold ${activeMenu === 'task' ? appConfig.text : 'font-medium'}`}>Task</span>
         </button>
-        <button onClick={() => setActiveMenu('finance')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'finance' ? clientData.text : 'text-slate-400'}`}>
-          <div className={`p-1.5 rounded-xl ${activeMenu === 'finance' ? clientData.light : 'bg-transparent'}`}><Wallet size={22} className={activeMenu === 'finance' ? `fill-blue-100 ${clientData.text}` : ''} /></div>
-          <span className={`text-[10px] font-bold ${activeMenu === 'finance' ? clientData.text : 'font-medium'}`}>Finance</span>
+        <button onClick={() => setActiveMenu('finance')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'finance' ? appConfig.text : 'text-slate-400'}`}>
+          <div className={`p-1.5 rounded-xl ${activeMenu === 'finance' ? appConfig.light : 'bg-transparent'}`}><Wallet size={22} className={activeMenu === 'finance' ? `fill-blue-100 ${appConfig.text}` : ''} /></div>
+          <span className={`text-[10px] font-bold ${activeMenu === 'finance' ? appConfig.text : 'font-medium'}`}>Finance</span>
         </button>
-        <button onClick={() => setActiveMenu('settings')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'settings' ? clientData.text : 'text-slate-400'}`}>
-          <div className={`p-1.5 rounded-xl ${activeMenu === 'settings' ? clientData.light : 'bg-transparent'}`}><Settings size={22} className={activeMenu === 'settings' ? `fill-blue-100 ${clientData.text}` : ''} /></div>
-          <span className={`text-[10px] font-bold ${activeMenu === 'settings' ? clientData.text : 'font-medium'}`}>Sistem</span>
+        <button onClick={() => setActiveMenu('settings')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'settings' ? appConfig.text : 'text-slate-400'}`}>
+          <div className={`p-1.5 rounded-xl ${activeMenu === 'settings' ? appConfig.light : 'bg-transparent'}`}><Settings size={22} className={activeMenu === 'settings' ? `fill-blue-100 ${appConfig.text}` : ''} /></div>
+          <span className={`text-[10px] font-bold ${activeMenu === 'settings' ? appConfig.text : 'font-medium'}`}>Sistem</span>
         </button>
       </nav>
 

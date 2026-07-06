@@ -49,7 +49,7 @@ export default function Login() {
           hasMobileAccess: Boolean(data.has_mobile_access),
           hasTaskAccess: Boolean(data.has_task_access)
         };
-        localStorage.setItem('syntegra_user_session', JSON.stringify(userSession));
+        localStorage.setItem('vest_user_session', JSON.stringify(userSession));
         
         // Arahkan user ke halaman yang tepat berdasarkan role
         if (data.role === 'admin' || data.role === 'manager') {
