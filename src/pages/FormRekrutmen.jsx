@@ -1,47 +1,59 @@
 import React, { useState, useEffect } from 'react';
 import { Briefcase, User, GraduationCap, Activity, Award, ShieldAlert, HelpCircle, FileUp, Plus, Trash2, CheckCircle2, Search, ArrowLeft } from 'lucide-react';
+import { supabase } from '../supabase'; // PASTIKAN PATH INI BENAR
 
 const FormRekrutmen = () => {
   const [activeView, setActiveView] = useState('form'); 
+  
+  // Deteksi Client ID dari URL (?cid=....)
+  const urlParams = new URLSearchParams(window.location.search);
+  const cid = urlParams.get('cid');
+  const [clientName, setClientName] = useState('Memuat Info Perusahaan...');
 
   // =======================================================================
-  // --- [STATE & FUNGSI CEK STATUS - TANPA SUPABASE] ---
+  // --- [STATE & FUNGSI CEK STATUS (TERKONEKSI DATABASE)] ---
   // =======================================================================
   const [nikCek, setNikCek] = useState('');
   const [hasilCek, setHasilCek] = useState(null);
   const [errorCek, setErrorCek] = useState('');
   const [isChecking, setIsChecking] = useState(false);
 
+  useEffect(() => {
+    const fetchClient = async () => {
+      if (!cid) {
+        setClientName("LINK TIDAK VALID");
+        return;
+      }
+      const { data } = await supabase.from('clients').select('name').eq('id', cid).single();
+      if (data) setClientName(data.name);
+    };
+    fetchClient();
+  }, [cid]);
+
   const handleCekStatus = async (e) => {
     e.preventDefault();
+    if (!cid) return setErrorCek("Link pelamar tidak valid.");
     setErrorCek(''); 
     setHasilCek(null);
     setIsChecking(true);
     
-    setTimeout(() => {
-      if (nikCek === '1234567890123456') {
-        setHasilCek({
-          nama_lengkap: 'Budi Santoso (Data Dummy)',
-          status: 'INTI',
-          lokasi_penempatan: 'Head Office - Jakarta'
-        });
-      } else if (nikCek.length === 16) {
-        setHasilCek({
-          nama_lengkap: 'Pelamar Baru (Data Dummy)',
-          status: 'PENDING',
-          lokasi_penempatan: null
-        });
+    const { data: candData } = await supabase.from('candidates').select('*').eq('nik_karyawan', nikCek).eq('client_id', cid).maybeSingle();
+    
+    if (candData) {
+      setHasilCek({ nama_lengkap: candData.nama_lengkap, status: candData.status || 'PENDING', lokasi_penempatan: candData.lokasi_penempatan });
+    } else {
+      const { data: empData } = await supabase.from('employees').select('*').eq('nik_karyawan', nikCek).eq('client_id', cid).maybeSingle();
+      if (empData) {
+        setHasilCek({ nama_lengkap: empData.nama_lengkap, status: 'INTI', lokasi_penempatan: empData.lokasi_penempatan });
       } else {
-        setErrorCek('Data pelamar dengan NIK tersebut tidak ditemukan. (Masukkan 16 digit)');
+        setErrorCek('Data pelamar dengan NIK tersebut tidak ditemukan di sistem kami.');
       }
-      setIsChecking(false);
-    }, 1500);
+    }
+    setIsChecking(false);
   };
-  // =======================================================================
-
 
   // =======================================================================
-  // --- [STATE & FUNGSI FORM REKRUTMEN - TANPA SUPABASE] ---
+  // --- [STATE FORM REKRUTMEN (UTUH TANPA ADA YANG DIHAPUS)] ---
   // =======================================================================
   const [formData, setFormData] = useState({
     bidang_jasa: 'Security (Satpam)', posisi_jabatan: '', alamat_domisili: '', nama_lengkap: '', nik_ktp: '', kewarganegaraan: 'WNI', jenis_kelamin: 'Laki-laki', 
@@ -67,29 +79,18 @@ const FormRekrutmen = () => {
   const [masterDivisions, setMasterDivisions] = useState([]);
 
   useEffect(() => {
-    const mockPositions = [
-      { id: 1, name: 'Komandan Regu' },
-      { id: 2, name: 'Anggota Satpam' },
-      { id: 3, name: 'Staff Administrasi' },
-      { id: 4, name: 'Cleaner' }
-    ];
+    const mockPositions = [ { id: 1, name: 'Komandan Regu' }, { id: 2, name: 'Anggota Satpam' }, { id: 3, name: 'Staff Administrasi' }, { id: 4, name: 'Cleaner' } ];
     const mockDivisions = ["Security (Satpam)", "Cleaning Service", "Parking Service", "Labour Supply (Tenaga Kerja)"];
-
     setMasterPositions(mockPositions);
     setMasterDivisions(mockDivisions);
-    
-    setFormData(prev => ({
-      ...prev, 
-      posisi_jabatan: mockPositions[0].name,
-      bidang_jasa: mockDivisions[0]
-    }));
+    setFormData(prev => ({ ...prev, posisi_jabatan: mockPositions[0].name, bidang_jasa: mockDivisions[0] }));
   }, []);
 
   const handleInputChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (file) {
-      if (file.size > 2097152) {
+      if (file.size > 2097152) { 
         alert(`Gagal! Ukuran file ${file.name} terlalu besar. Maksimal 2MB per file.`);
         e.target.value = null; 
         return;
@@ -106,34 +107,78 @@ const FormRekrutmen = () => {
   const addPelatihan = () => setPelatihanList([...pelatihanList, { jenis_sertifikasi: '', institusi: '', tahun: '', tingkat: '' }]);
   const removePelatihan = (index) => setPelatihanList(pelatihanList.filter((_, i) => i !== index));
 
-  const uploadFileDummy = async (file, pathName) => {
+  // Fungsi Panggilan API Storage Supabase
+  const uploadFileToSupabase = async (file, pathName, nik_ktp) => {
     if (!file) return null;
-    return `https://dummy-storage.com/${pathName}_${file.name}`;
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${pathName}_${nik_ktp}_${Math.random().toString(36).substring(2,8)}.${fileExt}`;
+    const filePath = `${cid}/${fileName}`; 
+    
+    const { error: uploadError } = await supabase.storage.from('berkas_pelamar').upload(filePath, file);
+    if (uploadError) throw uploadError;
+    
+    const { data } = supabase.storage.from('berkas_pelamar').getPublicUrl(filePath);
+    return data.publicUrl;
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!cid) return alert("Link pendaftaran tidak valid. Anda memerlukan QR Code / Tautan resmi dari perusahaan terkait.");
+    
     setIsSubmitting(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 1. SMART UPLOADER UNTUK SEMUA FILE SECARA PARALEL
+      const uploadedFilesUrls = {};
+      const fileNamesToUpload = [
+        'file_pas_foto', 'file_ktp', 'file_kk', 'file_ijazah', 'file_rek', 'file_skck',
+        'file_surat_sehat', 'file_vaksin', 'file_referensi_kerja', 'file_cv',
+        'file_sertifikat', 'file_npwp', 'file_bpjs_tk', 'file_bpjs_kes', 'file_sim'
+      ];
 
-      const ktpUrl = await uploadFileDummy(files.file_ktp, 'KTP'); 
-      const kkUrl = await uploadFileDummy(files.file_kk, 'KK'); 
-      
-      const payload = {
+      // Petakan proses unggah file
+      const uploadTasks = fileNamesToUpload.map(async (fileKey) => {
+        if (files[fileKey]) {
+          const pathName = fileKey.replace('file_', '').toUpperCase(); // cth: 'file_skck' jadi 'SKCK'
+          const url = await uploadFileToSupabase(files[fileKey], pathName, formData.nik_ktp);
+          uploadedFilesUrls[`url_${fileKey}`] = url; 
+        }
+      });
+
+      // Tunggu semua file selesai diunggah bersamaan
+      await Promise.all(uploadTasks);
+
+      // 2. Kumpulkan seluruh data form + array + URL file menjadi 1 objek JSON
+      const personalDataJSON = {
         ...formData, 
         tinggi_badan: parseInt(formData.tinggi_badan), 
         berat_badan: parseInt(formData.berat_badan),
-        berkas_ktp_url: ktpUrl, 
-        berkas_kk_url: kkUrl,
-        riwayat_pendidikan: JSON.stringify(pendidikanList), 
-        riwayat_pelatihan: JSON.stringify(pelatihanList), 
-        status: 'PENDING'
+        riwayat_pendidikan: pendidikanList, 
+        riwayat_pelatihan: pelatihanList,
+        ...uploadedFilesUrls // Menggabungkan semua link url file ke dalam JSON ini
       };
 
-      console.log("SIMULASI PENGIRIMAN DATA (PAYLOAD):", payload);
-      alert("Simulasi Sukses: Lamaran berhasil dikirim dan disimulasikan tersimpan! (Cek console log)");
-      window.location.reload(); 
+      // 3. Susun Payload untuk tabel Database 'candidates'
+      const payload = {
+        client_id: cid, 
+        nama_lengkap: formData.nama_lengkap,
+        nik_karyawan: formData.nik_ktp,
+        no_hp: formData.no_hp,
+        bidang_jasa: formData.bidang_jasa,
+        posisi_jabatan: formData.posisi_jabatan,
+        status: 'PENDING',
+        personal_data: personalDataJSON
+      };
+
+      // 4. Kirim ke Database
+      const { error } = await supabase.from('candidates').insert([payload]);
+      
+      if (error) {
+        if (error.code === '23505') alert("Pendaftaran gagal: NIK KTP ini sudah terdaftar sebelumnya.");
+        else throw error;
+      } else {
+        alert("BERHASIL! Data lamaran beserta seluruh berkas Anda telah terkirim ke HRD " + clientName);
+        window.location.reload(); 
+      }
     } catch (error) {
       alert("Terjadi kesalahan saat mengirim lamaran: " + error.message);
     } finally {
@@ -142,11 +187,23 @@ const FormRekrutmen = () => {
   };
   // =======================================================================
 
-  // --- REFINED TAIWIND CLASSES FOR BLUE THEME ---
   const inputClass = "w-full bg-white border border-slate-200 text-slate-800 text-sm rounded-xl focus:ring-4 focus:ring-blue-50 focus:border-blue-500 block p-3 transition-all duration-200 outline-none shadow-sm placeholder:text-slate-400";
   const labelClass = "block mb-1.5 text-xs font-semibold text-slate-600 uppercase tracking-wider";
   const sectionCardClass = "bg-white rounded-3xl p-6 md:p-8 shadow-xl shadow-slate-100/50 border border-slate-100 space-y-6";
   const iconHeaderClass = "bg-blue-50 text-blue-600 p-2.5 rounded-xl border border-blue-100/50";
+
+  // Akses Block Screen Jika Tanpa QR Code (Client ID)
+  if (!cid) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full text-center border border-rose-100">
+          <ShieldAlert size={48} className="mx-auto text-rose-500 mb-4"/>
+          <h2 className="text-xl font-bold text-slate-800 mb-2">Akses Ditolak</h2>
+          <p className="text-sm text-slate-500 mb-6">Tautan pendaftaran ini tidak memiliki identitas perusahaan (Client ID). Mohon scan ulang QR Code resmi yang diberikan oleh perusahaan.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8 font-sans pb-16 selection:bg-blue-500 selection:text-white">
@@ -163,11 +220,11 @@ const FormRekrutmen = () => {
             </div>
             
             <div className="flex-1">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-yellow-400/20 text-black rounded-full text-[10px] font-bold tracking-wider uppercase mb-3 border border-blue-400/30">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-yellow-400/20 text-black rounded-full text-[10px] font-bold tracking-wider uppercase mb-3 border border-blue-400/30 text-white">
                 <span className="w-1.5 h-1.5 bg-yellow-300 rounded-full animate-pulse"></span>
-                Portal Karir Resmi
+                Portal Karir Resmi - {clientName}
               </div>
-              <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-2">
+              <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-2 text-white">
                 {activeView === 'form' ? 'Formulir Pendaftaran Kerja' : 'Cek Status Seleksi'}
               </h1>
               <p className="text-blue-100/80 text-xs md:text-sm max-w-xl leading-relaxed">
@@ -558,7 +615,7 @@ const FormRekrutmen = () => {
               </div>
             </div>
 
-            {/* -- Submit Button (NON STICKY) -- */}
+            {/* -- Submit Button -- */}
             <div className="pt-4">
               <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-5 mb-6 flex flex-col md:flex-row items-center gap-4">
                   <div className="bg-blue-100 text-blue-600 p-3 rounded-full shrink-0"><CheckCircle2 size={24}/></div>
