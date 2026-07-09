@@ -18,12 +18,12 @@ import { saveAs } from 'file-saver';
 // TAMBAHKAN STRUKTUR DEFAULT PERMISSION DI BAWAH IMPORT:
 
 const defaultRolePermissions = {
-  hris: { view: false, create: false, edit: false, delete: false },
+  hris: { view: false, create: false, edit: false, delete: false, export: false },
   shift: { view: false, create: false, edit: false, delete: false, export: false },
   task: { view: false, create: false, edit: false, delete: false },
   approval: { view: false, approve: false },
   laporan: { view: false, export: false },
-  finance: { view: false, create: false, edit: false, delete: false },
+  finance: { view: false, create: false, edit: false, delete: false, export: false },
   settings: { view: false, edit: false },
   broadcast: { view: false, create: false, delete: false },
   mobile: { absen: true, laporan: true, pengajuan: true, task: false, slip: true }
@@ -42,10 +42,35 @@ const menuModules = [
 ];
 
 export default function ClientAdmin() {
+
+  // === PENGATURAN TOLERANSI KETERLAMBATAN ===
+  const TOLERANSI_TELAT_MENIT = 10; // Admin bisa mengubah angka ini kapan saja
+
+  // Fungsi pintar penghitung keterlambatan
+  const hitungKeterlambatan = (jamAbsen, jamShift) => {
+    if (!jamAbsen || !jamShift || jamShift === 'OFF') return 0;
+    
+    // Pecah format "08:00" menjadi jam dan menit
+    const [absenJam, absenMenit] = jamAbsen.split(':').map(Number);
+    const [shiftJam, shiftMenit] = jamShift.split(':').map(Number);
+    
+    const totalMenitAbsen = (absenJam * 60) + absenMenit;
+    const totalMenitShift = (shiftJam * 60) + shiftMenit;
+    
+    const selisihMenit = totalMenitAbsen - totalMenitShift;
+    
+    // Jika selisih lebih besar dari toleransi, berarti TELAT
+    if (selisihMenit > TOLERANSI_TELAT_MENIT) {
+      return selisihMenit;
+    }
+    return 0; // Tepat waktu
+  };
+
   const [activeMenu, setActiveMenu] = useState('hris');
   const [activeTaskLevel, setActiveTaskLevel] = useState('Level 1');
   
-  const [hrisTab, setHrisTab] = useState('absensi'); 
+  const [hrisTab, setHrisTab] = useState('absensi');
+  const [hrisOverviewCabang, setHrisOverviewCabang] = useState('Semua');
   const [financeTab, setFinanceTab] = useState('overview');
   const [laporanTab, setLaporanTab] = useState('patroli');
   const [settingTab, setSettingTab] = useState('gps_rules');
@@ -175,7 +200,6 @@ export default function ClientAdmin() {
     fetchAllData(parsedSession.id, parsedSession.role);
   }, []);
 
-  // 2. UPDATE fetchAllData (Menggunakan Smart Detector & Isolasi Multi-Tenant)
   // 2. UPDATE fetchAllData (Menggunakan Smart Detector & Isolasi Multi-Tenant)
   const fetchAllData = async (userId, sessionRole) => {
     try {
@@ -1351,18 +1375,29 @@ export default function ClientAdmin() {
 
   const handleCheckboxChange = (moduleId, action) => {
     setRoleForm(prev => {
-      const newPerms = { ...prev.permissions };
-      if (!newPerms[moduleId]) newPerms[moduleId] = {}; // <--- SABUK PENGAMAN (Cegah Crash)
-      newPerms[moduleId][action] = !newPerms[moduleId][action];
-      // Jika view dimatikan, matikan juga semua aksi lain di modul itu
-      if (action === 'view' && !newPerms[moduleId].view) {
-        Object.keys(newPerms[moduleId]).forEach(key => newPerms[moduleId][key] = false);
+      // JURUS DEEP COPY 100% AMAN: Cetak ulang memori dari nol agar React sadar
+      const clonedPerms = JSON.parse(JSON.stringify(prev.permissions || {}));
+      
+      if (!clonedPerms[moduleId]) {
+        clonedPerms[moduleId] = {};
       }
-      // Jika aksi lain dihidupkan, otomatis hidupkan view
-      if (action !== 'view' && newPerms[moduleId][action]) {
-        newPerms[moduleId].view = true;
+      
+      const isCurrentlyChecked = clonedPerms[moduleId][action];
+      clonedPerms[moduleId][action] = !isCurrentlyChecked;
+
+      // AUTO-LOGIC: Jika 'Lihat' (View) dimatikan, semua akses lain ikut mati
+      if (action === 'view' && isCurrentlyChecked === true) {
+        Object.keys(clonedPerms[moduleId]).forEach(key => {
+          clonedPerms[moduleId][key] = false;
+        });
       }
-      return { ...prev, permissions: newPerms };
+      
+      // AUTO-LOGIC: Jika akses lain (Buat/Ubah/Hapus) dihidupkan, 'Lihat' otomatis hidup
+      if (action !== 'view' && isCurrentlyChecked === false) {
+        clonedPerms[moduleId].view = true;
+      }
+
+      return { ...prev, permissions: clonedPerms };
     });
   };
 
@@ -1678,26 +1713,76 @@ export default function ClientAdmin() {
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight">HRIS & Recruitment</h2>
                     <p className="text-slate-500 text-sm mt-1">Kelola database karyawan, absensi, dan data pelamar baru.</p>
                   </div>
-                  <span className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 flex items-center gap-2 shadow-sm w-max"><Clock size={14}/> Hari Ini</span>
+                  <div className="flex items-center gap-2">
+                    {/* DROPDOWN FILTER CABANG */}
+                    <select value={hrisOverviewCabang} onChange={e => setHrisOverviewCabang(e.target.value)} className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-[#0a195c] outline-none shadow-sm cursor-pointer transition-colors focus:border-blue-500">
+                      <option value="Semua">Semua Cabang (Global)</option>
+                      {/* Mengambil daftar cabang otomatis dari data pegawai yang ada */}
+                      {[...new Set(employees.map(e => e.lokasi_penempatan).filter(Boolean))].map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                    </select>
+                    <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs font-black text-blue-700 flex items-center gap-2 shadow-sm shrink-0"><Clock size={14}/> Hari Ini</span>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6">
-                  <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
-                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Total Karyawan</p>
-                    <h3 className="text-2xl md:text-3xl font-black text-slate-800 mt-1 md:mt-2">{employees.length}</h3>
-                    <p className="text-[10px] md:text-xs text-blue-600 font-medium mt-1">Berstatus Aktif</p>
-                  </div>
-                  <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
-                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Pelamar Baru</p>
-                    <h3 className="text-2xl md:text-3xl font-black text-slate-800 mt-1 md:mt-2">{candidates.filter(c => c.status === 'PENDING').length}</h3>
-                    <p className="text-[10px] md:text-xs text-amber-500 font-medium mt-1">Menunggu Review</p>
-                  </div>
-                  <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-100">
-                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Hadir Hari Ini</p>
-                    <h3 className="text-2xl md:text-3xl font-black text-emerald-600 mt-1 md:mt-2">{attendances.filter(a => a.date === new Date().toISOString().split('T')[0]).length}</h3>
-                    <p className="text-[10px] md:text-xs text-slate-500 font-medium mt-1">Check-in tercatat</p>
-                  </div>
-                </div>
+                {(() => {
+                  const todayStr = new Date().toISOString().split('T')[0];
+                  
+                  // 1. Filter Karyawan Berdasarkan Cabang yang dipilih (Hanya yang masih Aktif)
+                  const baseEmployees = employees.filter(e => e.status_pegawai !== 'NONAKTIF');
+                  const targetEmployees = hrisOverviewCabang === 'Semua' 
+                    ? baseEmployees 
+                    : baseEmployees.filter(e => e.lokasi_penempatan === hrisOverviewCabang);
+
+                  // Kumpulkan ID pegawai yang masuk dalam filter untuk pencocokan absensi & cuti
+                  const targetEmpIds = targetEmployees.map(e => e.id);
+
+                  // 2. Hitung Hadir Hari Ini (Hanya dari cabang yang terpilih)
+                  const countHadir = attendances.filter(a => a.date === todayStr && targetEmpIds.includes(a.employee_id)).length;
+                  
+                  // 3. Hitung Cuti / Izin (Status APPROVED dan tanggal hari ini masuk di rentangnya)
+                  const countCuti = leaveRequests.filter(r => 
+                    r.status === 'APPROVED' && 
+                    r.start_date <= todayStr && 
+                    r.end_date >= todayStr && 
+                    targetEmpIds.includes(r.employee_id)
+                  ).length;
+
+                  // 4. Hitung Belum / Tidak Absen (Rumus: Total - Hadir - Cuti)
+                  const countTidakAbsen = targetEmployees.length - countHadir - countCuti;
+
+                  return (
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-6">
+                      <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group hover:border-blue-300 transition-colors">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-110 transition-transform duration-500"><Users size={56}/></div>
+                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Total Karyawan Aktif</p>
+                        <h3 className="text-2xl md:text-4xl font-black text-slate-800 mt-1 md:mt-2">{targetEmployees.length}</h3>
+                        <p className="text-[10px] md:text-xs text-blue-600 font-medium mt-1">Di cabang terpilih</p>
+                      </div>
+                      
+                      <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group hover:border-emerald-300 transition-colors">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-110 transition-transform duration-500"><CheckCircle2 size={56} className="text-emerald-500"/></div>
+                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Hadir Hari Ini</p>
+                        <h3 className="text-2xl md:text-4xl font-black text-emerald-600 mt-1 md:mt-2">{countHadir}</h3>
+                        <p className="text-[10px] md:text-xs text-emerald-600 font-medium mt-1">Telah Check-In</p>
+                      </div>
+                      
+                      <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group hover:border-rose-300 transition-colors">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-110 transition-transform duration-500"><XCircle size={56} className="text-rose-500"/></div>
+                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Tidak / Belum Absen</p>
+                        {/* Math.max(0) untuk mencegah nilai minus jika ada anomali data */}
+                        <h3 className="text-2xl md:text-4xl font-black text-rose-600 mt-1 md:mt-2">{Math.max(0, countTidakAbsen)}</h3>
+                        <p className="text-[10px] md:text-xs text-rose-500 font-medium mt-1">Mangkir atau Libur</p>
+                      </div>
+                      
+                      <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group hover:border-amber-300 transition-colors">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-110 transition-transform duration-500"><FileText size={56} className="text-amber-500"/></div>
+                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Sedang Cuti / Izin</p>
+                        <h3 className="text-2xl md:text-4xl font-black text-amber-500 mt-1 md:mt-2">{countCuti}</h3>
+                        <p className="text-[10px] md:text-xs text-amber-600 font-medium mt-1">Berhalangan resmi</p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
                   {[
@@ -1749,7 +1834,7 @@ export default function ClientAdmin() {
                     <div className="overflow-x-auto">
                       <table className="w-full text-left">
                         <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                          <tr><th className="px-6 py-4">Tanggal</th><th className="px-6 py-4">Pegawai</th><th className="px-6 py-4">Lokasi & Foto</th><th className="px-6 py-4">Waktu (IN/OUT)</th><th className="px-6 py-4 text-center">Aksi</th></tr>
+                          <tr><th className="px-6 py-4">Tanggal</th><th className="px-6 py-4">Pegawai</th><th className="px-6 py-4">Lokasi & Foto</th><th className="px-6 py-4">Jadwal & Realisasi (IN/OUT)</th><th className="px-6 py-4 text-center">Aksi</th></tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-sm">
                           {attendances.filter(a => {
@@ -1769,17 +1854,40 @@ export default function ClientAdmin() {
                                 </div>
                               </td>
                               <td className="px-6 py-4">
-                                {!isMassEditMode ? (
-                                  <>
-                                    <span className="font-black text-emerald-600 block">IN: {att.check_in_time ? att.check_in_time.substring(0,5) : '--:--'}</span>
-                                    <span className="font-black text-slate-500 block mt-0.5">OUT: {att.check_out_time ? att.check_out_time.substring(0,5) : '--:--'}</span>
-                                  </>
-                                ) : (
-                                  <div className="flex flex-col gap-1.5 w-24">
-                                    <div className="flex items-center gap-1"><span className="text-[10px] font-bold text-emerald-600 w-6">IN:</span> <input type="time" value={editableAttendances[att.id]?.in || ''} onChange={e => setEditableAttendances(prev => ({...prev, [att.id]: {...prev[att.id], in: e.target.value}}))} className="border border-slate-300 rounded px-1.5 py-1 text-xs outline-none focus:border-blue-500 w-full" /></div>
-                                    <div className="flex items-center gap-1"><span className="text-[10px] font-bold text-slate-500 w-6">OUT:</span> <input type="time" value={editableAttendances[att.id]?.out || ''} onChange={e => setEditableAttendances(prev => ({...prev, [att.id]: {...prev[att.id], out: e.target.value}}))} className="border border-slate-300 rounded px-1.5 py-1 text-xs outline-none focus:border-blue-500 w-full" /></div>
-                                  </div>
-                                )}
+                                {/* PERBAIKAN FATAL CRASH: Penutup })() di bawah sudah dikoreksi */}
+                                {(() => {
+                                  const jadwalShift = shifts.find(s => s.employee_id === att.employee_id && s.date === att.date);
+                                  const menitTelat = hitungKeterlambatan(att.check_in_time, jadwalShift?.time_in);
+
+                                  return !isMassEditMode ? (
+                                    <>
+                                      {jadwalShift && jadwalShift.shift_type !== 'Libur' ? (
+                                        <div className="mb-2 pb-1 border-b border-slate-100 border-dashed">
+                                          <span className="text-[9px] font-black text-slate-400 uppercase">Jadwal Wajib:</span>
+                                          <span className="text-xs font-bold text-slate-600 ml-1">{jadwalShift.time_in?.substring(0,5)} - {jadwalShift.time_out?.substring(0,5)}</span>
+                                        </div>
+                                      ) : (
+                                        <div className="mb-2 pb-1 border-b border-slate-100 border-dashed">
+                                          <span className="text-[9px] font-black text-slate-400 uppercase">Tanpa Jadwal Shift</span>
+                                        </div>
+                                      )}
+
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-black text-emerald-600 block">IN: {att.check_in_time ? att.check_in_time.substring(0,5) : '--:--'}</span>
+                                        {menitTelat > 0 && (
+                                          <span className="bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded text-[9px] font-black animate-pulse">TELAT {menitTelat} MNT</span>
+                                        )}
+                                      </div>
+                                      <span className="font-black text-slate-500 block mt-0.5">OUT: {att.check_out_time ? att.check_out_time.substring(0,5) : '--:--'}</span>
+                                    </>
+                                  ) : (
+                                    <div className="flex flex-col gap-1.5 w-24">
+                                      <div className="flex items-center gap-1"><span className="text-[10px] font-bold text-emerald-600 w-6">IN:</span> <input type="time" value={editableAttendances[att.id]?.in || ''} onChange={e => setEditableAttendances(prev => ({...prev, [att.id]: {...prev[att.id], in: e.target.value}}))} className="border border-slate-300 rounded px-1.5 py-1 text-xs outline-none focus:border-blue-500 w-full" /></div>
+                                      <div className="flex items-center gap-1"><span className="text-[10px] font-bold text-slate-500 w-6">OUT:</span> <input type="time" value={editableAttendances[att.id]?.out || ''} onChange={e => setEditableAttendances(prev => ({...prev, [att.id]: {...prev[att.id], out: e.target.value}}))} className="border border-slate-300 rounded px-1.5 py-1 text-xs outline-none focus:border-blue-500 w-full" /></div>
+                                    </div>
+                                  );
+                                })()} 
+                                {/* ^^^ INI PENUTUP YANG BENAR ^^^ */}
                               </td>
                               <td className="px-6 py-4 text-center align-middle">
                                 <div className="flex justify-center gap-2">
@@ -1851,40 +1959,38 @@ export default function ClientAdmin() {
                             <tr><th className="px-6 py-4">Nama Pelamar</th><th className="px-6 py-4">Posisi & Divisi</th><th className="px-6 py-4">Kontak</th><th className="px-6 py-4 text-center">Tindakan HRD</th></tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-sm">
-                            {candidates.filter(c => c.status === rekrutmenSubTab).map(c => (
-                              <tr key={c.id} className="hover:bg-slate-50">
+                            {candidates.filter(c => c.status === rekrutmenSubTab).map(cand => (
+                              <tr key={cand.id} className="hover:bg-slate-50 transition-colors">
                                 <td className="px-6 py-4">
-                                   <span className="font-bold text-slate-800 block">{c.nama_lengkap}</span>
-                                   <span className="text-[10px] text-slate-400 font-semibold uppercase">NIK KTP: {c.nik_karyawan || '-'}</span>
+                                  <span className="font-bold text-slate-800 block">{cand.nama_lengkap}</span>
+                                  <span className="text-[10px] font-black text-slate-400 tracking-wider">NIK: {cand.nik_karyawan}</span>
                                 </td>
                                 <td className="px-6 py-4">
-                                   <span className="block font-bold text-slate-700">{c.posisi_jabatan}</span>
-                                   <span className="block text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded w-max mt-1 font-semibold">{c.bidang_jasa}</span>
+                                  <span className="font-bold text-slate-700 text-xs block">{cand.posisi_jabatan}</span>
+                                  <span className="text-[10px] text-slate-500 font-semibold">{cand.bidang_jasa}</span>
                                 </td>
-                                <td className="px-6 py-4"><span className="text-xs font-bold text-slate-700">{c.no_hp || '-'}</span></td>
+                                <td className="px-6 py-4">
+                                  <span className="text-xs font-bold text-slate-600 block">{cand.no_hp}</span>
+                                </td>
                                 <td className="px-6 py-4 text-center">
-                                  {hasPermission('hris', 'edit') ? (
-                                    <div className="flex justify-center gap-2">
-                                      {rekrutmenSubTab === 'PENDING' ? (
-                                        <>
-                                          <button onClick={() => handleUpdateCandidateStatus(c.id, 'BANK_DATA')} className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors border border-slate-200">Ke Bank Data</button>
-                                          <button onClick={() => handleAcceptToEmployee(c)} className="bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-100 transition-colors border border-emerald-200">Angkat Karyawan</button>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <button onClick={() => handleUpdateCandidateStatus(c.id, 'PENDING')} className="bg-amber-50 text-amber-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-amber-100 transition-colors border border-amber-200">Batal / Kembalikan</button>
-                                          <button onClick={() => handleAcceptToEmployee(c)} className="bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-100 transition-colors border border-emerald-200">Angkat Karyawan</button>
-                                        </>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <span className="text-[10px] font-bold text-slate-400 italic">No Access</span>
-                                  )}
+                                  <div className="flex justify-center gap-2">
+                                    {rekrutmenSubTab === 'PENDING' ? (
+                                      <>
+                                        <button onClick={() => handleUpdateCandidateStatus(cand.id, 'BANK_DATA')} className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-xs font-bold transition-colors">Ke Bank Data</button>
+                                        <button onClick={() => handleAcceptToEmployee(cand)} className="px-3 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg text-xs font-bold transition-colors">Angkat Karyawan</button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <button onClick={() => handleUpdateCandidateStatus(cand.id, 'PENDING')} className="px-3 py-1.5 bg-amber-50 text-amber-600 hover:bg-amber-100 rounded-lg text-xs font-bold transition-colors">Kembalikan</button>
+                                        <button onClick={() => handleAcceptToEmployee(cand)} className="px-3 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg text-xs font-bold transition-colors">Angkat Karyawan</button>
+                                      </>
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                             ))}
                             {candidates.filter(c => c.status === rekrutmenSubTab).length === 0 && (
-                               <tr><td colSpan="4" className="text-center py-8 text-slate-400 font-bold">Tidak ada data pelamar di kategori ini.</td></tr>
+                              <tr><td colSpan="4" className="text-center py-8 text-slate-400 font-bold bg-slate-50/50">Tidak ada pelamar di kategori ini.</td></tr>
                             )}
                           </tbody>
                         </table>
@@ -2317,7 +2423,9 @@ export default function ClientAdmin() {
                             <td className="px-6 py-4"><span className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-md border ${shift.shift_type === 'Libur' ? 'bg-rose-50 text-rose-600 border-rose-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200'}`}>{shift.shift_type}</span></td>
                             <td className="px-6 py-4 font-black text-slate-700">{shift.time_in ? shift.time_in.substring(0,5) : 'OFF'} <span className="text-slate-400 mx-1">-</span> {shift.time_out ? shift.time_out.substring(0,5) : 'OFF'}</td>
                             <td className="px-6 py-4 text-center">
-                              <button onClick={() => { setShiftForm({ id: shift.id, employee_id: shift.employee_id, date: shift.date, shift_type: shift.shift_type, time_in: shift.time_in ? shift.time_in.substring(0,5) : '', time_out: shift.time_out ? shift.time_out.substring(0,5) : '' }); setIsShiftModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><FileText size={16}/></button>
+                               {hasPermission('shift', 'edit') && (
+                                  <button onClick={() => { setShiftForm({ id: shift.id, employee_id: shift.employee_id, date: shift.date, shift_type: shift.shift_type, time_in: shift.time_in ? shift.time_in.substring(0,5) : '', time_out: shift.time_out ? shift.time_out.substring(0,5) : '' }); setIsShiftModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 mr-2"><FileText size={16}/></button>
+                               )}
                                {hasPermission('shift', 'delete') && (
                                   <button onClick={async () => { if(window.confirm('Hapus jadwal ini?')) { await supabase.from('employee_shifts').delete().eq('id', shift.id); fetchAllData(); } }} className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100"><Trash2 size={16}/></button>
                                )}
@@ -3483,63 +3591,92 @@ export default function ClientAdmin() {
                   {/* Matriks Hak Akses */}
                   <div>
                     <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest border-b border-slate-200 pb-2 mb-4">Matriks Hak Akses Dashboard Admin</h4>
-                    <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                    <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm mb-6">
                       <table className="w-full text-left bg-white">
-                        <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-500 uppercase">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-500 uppercase tracking-wider">
                           <tr>
                             <th className="px-4 py-3 border-r border-slate-200">Modul Aplikasi</th>
-                            <th className="px-4 py-3 text-center">Lihat (View)</th>
-                            <th className="px-4 py-3 text-center">Buat (Create)</th>
-                            <th className="px-4 py-3 text-center">Ubah (Edit/Approve)</th>
-                            <th className="px-4 py-3 text-center">Hapus (Delete)</th>
+                            <th className="px-4 py-3 text-center">Lihat</th>
+                            <th className="px-4 py-3 text-center">Buat</th>
+                            <th className="px-4 py-3 text-center">Ubah/ACC</th>
+                            <th className="px-4 py-3 text-center">Hapus</th>
+                            <th className="px-4 py-3 text-center">Export</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-sm font-semibold text-slate-700">
-                          {menuModules.map(module => (
+                          {menuModules.filter(m => m.id !== 'mobile').map(module => (
                             <tr key={module.id} className="hover:bg-indigo-50/30 transition-colors">
                               <td className="px-4 py-3 border-r border-slate-100 bg-slate-50/50">{module.label}</td>
                               
+                              {/* KOLOM LIHAT (VIEW) */}
                               <td className="px-4 py-3 text-center">
                                 {module.actions.includes('view') ? <input type="checkbox" checked={roleForm.permissions[module.id]?.view || false} onChange={() => handleCheckboxChange(module.id, 'view')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
                               </td>
+                              
+                              {/* KOLOM BUAT (CREATE) */}
                               <td className="px-4 py-3 text-center">
                                 {module.actions.includes('create') ? <input type="checkbox" checked={roleForm.permissions[module.id]?.create || false} onChange={() => handleCheckboxChange(module.id, 'create')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
                               </td>
+                              
+                              {/* KOLOM UBAH & SETUJUI (EDIT/APPROVE) */}
                               <td className="px-4 py-3 text-center">
-                                {(module.actions.includes('edit') || module.actions.includes('approve') || module.actions.includes('export')) ? <input type="checkbox" checked={roleForm.permissions[module.id]?.edit || roleForm.permissions[module.id]?.approve || roleForm.permissions[module.id]?.export || false} onChange={() => handleCheckboxChange(module.id, module.actions.includes('edit') ? 'edit' : module.actions.includes('approve') ? 'approve' : 'export')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
+                                {module.actions.includes('edit') ? (
+                                  <input type="checkbox" checked={roleForm.permissions[module.id]?.edit || false} onChange={() => handleCheckboxChange(module.id, 'edit')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/>
+                                ) : module.actions.includes('approve') ? (
+                                  <input type="checkbox" checked={roleForm.permissions[module.id]?.approve || false} onChange={() => handleCheckboxChange(module.id, 'approve')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/>
+                                ) : <span className="text-slate-300">-</span>}
                               </td>
+                              
+                              {/* KOLOM HAPUS (DELETE) */}
                               <td className="px-4 py-3 text-center">
                                 {module.actions.includes('delete') ? <input type="checkbox" checked={roleForm.permissions[module.id]?.delete || false} onChange={() => handleCheckboxChange(module.id, 'delete')} className="w-4 h-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
+                              </td>
+
+                              {/* KOLOM EXPORT */}
+                              <td className="px-4 py-3 text-center">
+                                {module.actions.includes('export') ? <input type="checkbox" checked={roleForm.permissions[module.id]?.export || false} onChange={() => handleCheckboxChange(module.id, 'export')} className="w-4 h-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
                               </td>
                             </tr>
                           ))}
                         </tbody>
-                        </table>
+                      </table>
                     </div>
+
                     {/* AKSES MENU APLIKASI MOBILE (BAWAAN ROLE) */}
                       <div className="mt-6">
                         <h4 className="text-xs font-black text-slate-800 uppercase mb-3">Akses Menu Aplikasi Mobile (Bawaan Role)</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                          {['absen', 'laporan', 'pengajuan', 'task', 'slip'].map(menu => (
+                          {['absen', 'laporan', 'pengajuan', 'task', 'slip'].map(menu => {
+                            // Pastikan membaca data dengan aman
+                            const isChecked = roleForm?.permissions?.mobile?.[menu] === true;
+                            
+                            return (
                             <label key={menu} className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2.5 rounded-lg cursor-pointer hover:bg-slate-100 transition-colors">
                               <input 
                                 type="checkbox" 
-                                checked={roleForm.permissions?.mobile?.[menu] || false}
-                                onChange={(e) => setRoleForm(prev => ({
-                                  ...prev,
-                                  permissions: {
-                                    ...prev.permissions,
-                                    mobile: {
-                                      ...(prev.permissions.mobile || {}),
-                                      [menu]: e.target.checked
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const newStatus = e.target.checked;
+                                  setRoleForm(prev => {
+                                    // JURUS DEEP COPY: Cetak ulang memori dari nol agar React sadar ada perubahan
+                                    const clonedPerms = JSON.parse(JSON.stringify(prev.permissions || {}));
+                                    
+                                    // Siapkan ruang 'mobile' jika sebelumnya kosong melompong
+                                    if (!clonedPerms.mobile) {
+                                      clonedPerms.mobile = {};
                                     }
-                                  }
-                                }))}
+                                    
+                                    // Masukkan status centang yang baru
+                                    clonedPerms.mobile[menu] = newStatus;
+                                    
+                                    return { ...prev, permissions: clonedPerms };
+                                  });
+                                }}
                                 className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
                               />
                               <span className="text-xs font-bold text-slate-700 capitalize">Menu {menu}</span>
                             </label>
-                          ))}
+                          )})}
                         </div>
                       </div>
                     </div>
