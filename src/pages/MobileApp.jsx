@@ -6,12 +6,30 @@ import {
   Clock, ShieldAlert, CreditCard, 
   Calendar, Settings, Lock, Image as ImageIcon, Bell, ArrowRight,
   CheckCircle2, LogOut, LogIn, History, Check, ChevronLeft, ChevronRight, Upload, X, RefreshCw, Plus,
-  FolderOpen, CalendarMinus, FileWarning, UserX 
+  FolderOpen, CalendarMinus, FileWarning, UserX, Trash2
 } from 'lucide-react';
 
 export default function MobileApp() {
   const navigate = useNavigate();
-  const [activeMenu, setActiveMenu] = useState('home'); // 'home', 'settings', 'absen', 'laporan', 'pengajuan', dll
+  const [activeMenu, setActiveMenu] = useState('home');
+  // FUNGSI CEK HAK AKSES MENU MOBILE (SMART DETECTOR)
+  const hasMobileMenu = (menuName) => {
+    // 1. Prioritas Utama: Cek Override (Perorangan)
+    if (currentUser?.permissions?.mobile && currentUser.permissions.mobile[menuName] !== undefined) {
+      return currentUser.permissions.mobile[menuName];
+    }
+    
+    // 2. Prioritas Kedua: Cek Role (Bawaan Jabatan)
+    const role = currentUser?.role;
+    if (['Super Admin', 'Developer', 'Admin Perusahaan', 'Manager Operasional'].includes(role)) {
+      return true; // Manager ke atas otomatis buka semua
+    }
+    if (['Staff Lapangan', 'Komandan Regu'].includes(role)) {
+      const defaults = { absen: true, laporan: true, pengajuan: true, task: false, slip: true };
+      return defaults[menuName] || false;
+    }
+    return true; // Fallback darurat
+  };
   const [laporanTab, setLaporanTab] = useState('reguler');
   const currentHour = new Date().getHours();
   const greetingText = currentHour < 11 ? 'PAGI' : currentHour < 15 ? 'SIANG' : currentHour < 18 ? 'SORE' : 'MALAM';
@@ -23,6 +41,7 @@ export default function MobileApp() {
   const fileInputRef = useRef(null);
   const izinFileInputRef = useRef(null);
   const attachmentInputRef = useRef(null);
+  const [activeAttendanceId, setActiveAttendanceId] = useState(null);
 
   // Tambahkan ini di bawah state laporan / attendance history
   const [leaveHistory, setLeaveHistory] = useState([]);
@@ -56,6 +75,12 @@ export default function MobileApp() {
   // State Khusus Pengajuan (Cuti & Izin)
   const [pengajuanForm, setPengajuanForm] = useState({ jenis: '', startDate: '', endDate: '', alasan: '', lampiran: null });
   const [isSubmittingPengajuan, setIsSubmittingPengajuan] = useState(false);
+
+  const [instructions, setInstructions] = useState([]);
+  const [colleagues, setColleagues] = useState([]); // Daftar bawahan/rekan selokasi untuk Danru
+  const [isInstructionModalOpen, setIsInstructionModalOpen] = useState(false);
+  const [instForm, setInstForm] = useState({ broadcast_type: 'Instruksi', target_type: 'LOCATION', target_val: '', content: '', file: null });
+  const [isSubmittingInst, setIsSubmittingInst] = useState(false);
 
   // State Khusus Reimbursement
   const reimburseFileInputRef = useRef(null);
@@ -120,17 +145,29 @@ export default function MobileApp() {
   }, [activeMenu]);
 
   const fetchUserData = async (userId, parsedSession) => {
-    // Tambahkan 'sisa_cuti' pada select di bawah ini:
-    const { data } = await supabase.from('employees').select('nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti').eq('id', userId).single();
-    if (data) {
-      const initials = data.nama_lengkap.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
-      // Tambahkan sisa_cuti ke dalam setCurrentUser:
-      setCurrentUser({ id: userId, name: data.nama_lengkap, role: data.role, division: data.bidang_jasa, avatar: initials, avatar_url: data.avatar_url, sisa_cuti: data.sisa_cuti || 0 });
-      const userPerms = typeof data.permissions === 'string' ? JSON.parse(data.permissions) : data.permissions;
-      if (userPerms) setPermissions(userPerms);
-    } else {
-      const initials = (parsedSession.name || 'User').split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
-      setCurrentUser({ ...parsedSession, avatar: initials, avatar_url: parsedSession.avatar_url || null, sisa_cuti: 0 });
+    try {
+      const { data, error } = await supabase.from('employees')
+        .select('client_id, nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti, lokasi_penempatan')
+        .eq('nik_karyawan', parsedSession.nik).single(); // <-- Ganti session.nik jadi parsedSession.nik
+
+      if (error) throw error;
+      if (data) {
+        setCurrentUser({
+          id: parsedSession.id, // <-- Ganti session.id jadi parsedSession.id
+          client_id: data.client_id,
+          nik: parsedSession.nik,
+          name: data.nama_lengkap,
+          role: data.role,
+          division: data.bidang_jasa,
+          permissions: data.permissions || {},
+          avatar: data.avatar_url,
+          avatar_url: data.avatar_url,
+          sisa_cuti: data.sisa_cuti || 0, // <-- Samakan kuncinya dengan UI (sisa_cuti)
+          location: data.lokasi_penempatan
+        });
+      }
+    } catch (err) {
+      console.error("Gagal menarik data profil:", err);
     }
   };
 
@@ -153,23 +190,80 @@ export default function MobileApp() {
     // --- FETCH RIWAYAT REIMBURSEMENT ---
     const { data: rmData } = await supabase.from('reimbursements').select('*').eq('employee_id', userId).order('created_at', { ascending: false }).limit(20);
     if (rmData) setReimburseHistory(rmData);
+
+    // FETCH INSTRUKSI (Penyaringan Multi-Level)
+    const { data: userDb } = await supabase.from('employees').select('lokasi_penempatan').eq('id', userId).single();
+    const loc = userDb?.lokasi_penempatan || 'Unknown';
+
+    const { data: instData } = await supabase.from('instructions')
+      .select('*, employees!sender_id(nama_lengkap, posisi_jabatan)')
+      .order('created_at', { ascending: false });
+    
+    if (instData) {
+      // Filter di sisi Client: Cuma lihat ALL, Lokasi dia, atau ID dia.
+      const myInst = instData.filter(i => 
+        i.target_type === 'ALL' || 
+        (i.target_type === 'LOCATION' && i.target_val === loc) || 
+        (i.target_type === 'INDIVIDUAL' && i.target_val === userId) ||
+        i.sender_id === userId // Bisa melihat instruksi yang dia buat sendiri
+      );
+      setInstructions(myInst);
+    }
+
+    // Jika dia Danru/Manager, tarik data rekan di lokasi yang sama untuk form target
+    const { data: temanData } = await supabase.from('employees').select('id, nama_lengkap').eq('lokasi_penempatan', loc);
+    if (temanData) setColleagues(temanData);
   };
 
   const checkTodayAttendance = async (userId) => {
-    const d = new Date();
-    const today = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-    const { data } = await supabase.from('attendances').select('*').eq('employee_id', userId).eq('date', today).single();
-    
-    if (data) {
-      setAbsenId(data.id);
-      setHasAbsenMasuk(true);
-      setAbsenInTime(data.check_in_time?.substring(0, 5) || '--:--');
-      setAbsenInPhotoDb(data.photo_url);
-      if (data.check_out_time) {
-        setHasAbsenKeluar(true);
-        setAbsenOutTime(data.check_out_time.substring(0, 5));
-        setAbsenOutPhotoDb(data.photo_out_url);
+    try {
+      const d = new Date();
+      const today = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+
+      // 1. Ambil 1 data absen PALING TERAKHIR DIBUAT (Bukan berdasarkan tanggal hari ini)
+      const { data: attData } = await supabase.from('attendances')
+        .select('*')
+        .eq('employee_id', userId)
+        .order('created_at', { ascending: false }) // Kunci Open Shift ada di sini!
+        .limit(1);
+
+      if (attData && attData.length > 0) {
+        const lastAtt = attData[0];
+
+        // SKENARIO A: OPEN SHIFT LINTAS HARI (Sudah Masuk, Tapi Belum Keluar)
+        if (lastAtt.check_in_time && !lastAtt.check_out_time) {
+          setHasAbsenMasuk(true);
+          setHasAbsenKeluar(false);
+          setActiveAttendanceId(lastAtt.id); // <--- SIMPAN ID SHIFT MENGGANTUNG
+          setAbsenInTime(lastAtt.check_in_time.substring(0, 5));
+          setAbsenOutTime('--:--');
+        }
+        // SKENARIO B: SHIFT HARI INI SUDAH SELESAI DITUTUP
+        else if (lastAtt.date === today && lastAtt.check_in_time && lastAtt.check_out_time) {
+          setHasAbsenMasuk(true);
+          setHasAbsenKeluar(true);
+          setActiveAttendanceId(null);
+          setAbsenInTime(lastAtt.check_in_time.substring(0, 5));
+          setAbsenOutTime(lastAtt.check_out_time.substring(0, 5));
+        }
+        // SKENARIO C: BELUM MULAI SHIFT HARI INI
+        else {
+          setHasAbsenMasuk(false);
+          setHasAbsenKeluar(false);
+          setActiveAttendanceId(null);
+          setAbsenInTime('--:--');
+          setAbsenOutTime('--:--');
+        }
+      } else {
+        // JIKA BELUM PERNAH ABSEN SAMA SEKALI
+        setHasAbsenMasuk(false);
+        setHasAbsenKeluar(false);
+        setActiveAttendanceId(null);
+        setAbsenInTime('--:--');
+        setAbsenOutTime('--:--');
       }
+    } catch (err) {
+      console.error("Gagal cek status shift:", err);
     }
   };
 
@@ -318,7 +412,7 @@ export default function MobileApp() {
 
       const descJson = JSON.stringify({ notes: patrolDesc, photos: uploadedData });
       const { error } = await supabase.from('field_reports').insert([{
-        employee_id: currentUser.id, report_type: 'patroli', title: `Patroli di ${patrolLocName}`, description: descJson
+        client_id: currentUser.client_id, employee_id: currentUser.id, report_type: 'patroli', title: `Patroli di ${patrolLocName}`, description: descJson
       }]);
 
       if (error) throw error;
@@ -352,7 +446,7 @@ export default function MobileApp() {
 
       const descJson = JSON.stringify({ notes: regulerDesc, photos: uploadedData });
       const { error } = await supabase.from('field_reports').insert([{
-        employee_id: currentUser.id, report_type: 'reguler', title: `Laporan Reguler Lapangan`, description: descJson
+        client_id: currentUser.client_id, employee_id: currentUser.id, report_type: 'reguler', title: `Laporan Reguler Lapangan`, description: descJson
       }]);
 
       if (error) throw error;
@@ -366,6 +460,49 @@ export default function MobileApp() {
     } finally {
       setIsSubmittingReport(false);
     }
+  };
+
+  const handleCreateInstruction = async (e) => {
+    e.preventDefault();
+    if (!instForm.content) return alert("Isi instruksi kosong!");
+    setIsSubmittingInst(true);
+    try {
+      let fileUrl = null; let filePath = null;
+      if (instForm.file) {
+        const fileExt = instForm.file.name.split('.').pop();
+        filePath = `mobile/${Date.now()}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage.from('instruction_files').upload(filePath, instForm.file);
+        if (uploadError) throw uploadError;
+        const { data } = supabase.storage.from('instruction_files').getPublicUrl(filePath);
+        fileUrl = data.publicUrl;
+      }
+
+      // Danru hanya bisa kirim ke lokasinya atau perorangan di lokasinya
+      const payload = {
+        client_id: currentUser.client_id,
+        sender_id: currentUser.id,
+        broadcast_type: instForm.broadcast_type, 
+        target_type: instForm.target_type,
+        target_val: instForm.target_type === 'LOCATION' ? currentUser.location : instForm.target_val,
+        content: instForm.content,
+        attachment_url: fileUrl,
+        attachment_path: filePath
+      };
+
+      const { error } = await supabase.from('instructions').insert([payload]);
+      if (error) throw error;
+      alert("Instruksi terkirim!");
+      setIsInstructionModalOpen(false);
+      setInstForm({ broadcast_type: 'Instruksi', target_type: 'LOCATION', target_val: '', content: '', file: null });
+      fetchHistories(currentUser.id);
+    } catch (err) { alert("Gagal: " + err.message); } finally { setIsSubmittingInst(false); }
+  };
+
+  const handleDeleteInstruction = async (id, filePath) => {
+    if (!window.confirm("Hapus instruksi ini?")) return;
+    if (filePath) await supabase.storage.from('instruction_files').remove([filePath]);
+    await supabase.from('instructions').delete().eq('id', id);
+    fetchHistories(currentUser.id);
   };
 
   // FUNGSI UNTUK SUBMIT PENGAJUAN IZIN & CUTI
@@ -405,11 +542,11 @@ export default function MobileApp() {
 
       // Siapkan Payload Data ke Database
       const payload = {
+        client_id: currentUser.client_id,
         employee_id: currentUser.id,
         request_type: activeMenu === 'form_cuti' ? 'CUTI' : 'IZIN',
         category: pengajuanForm.jenis || (activeMenu === 'form_cuti' ? 'Tahunan' : 'Sakit'),
         start_date: pengajuanForm.startDate,
-        // Jika Form Izin (endDate kosong), jadikan endDate = startDate agar database aman
         end_date: pengajuanForm.endDate || pengajuanForm.startDate, 
         reason: pengajuanForm.alasan,
         attachment_url: finalAttachmentUrl,
@@ -422,6 +559,7 @@ export default function MobileApp() {
       alert("Berhasil! Pengajuan Anda sudah terkirim ke HRD.");
       setActiveMenu('pengajuan'); 
       setPengajuanForm({ jenis: '', startDate: '', endDate: '', alasan: '', lampiran: null });
+      fetchHistories(currentUser.id);
     } catch (error) {
       alert("Gagal mengirim pengajuan: " + error.message);
     } finally {
@@ -448,6 +586,7 @@ export default function MobileApp() {
       
       // 2. Simpan ke database
       const payload = {
+        client_id: currentUser.client_id,
         employee_id: currentUser.id,
         category: reimburseForm.category,
         amount: parseFloat(reimburseForm.amount),
@@ -480,6 +619,7 @@ export default function MobileApp() {
     setIsSubmittingKoreksi(true);
     try {
       const payload = {
+        client_id: currentUser.client_id,
         employee_id: currentUser.id,
         date: koreksiForm.date,
         correction_type: koreksiForm.type,
@@ -495,6 +635,7 @@ export default function MobileApp() {
       alert("Berhasil! Pengajuan Perbaikan Absen terkirim ke HRD.");
       setActiveMenu('pengajuan'); 
       setKoreksiForm({ date: '', type: 'OUT', timeIn: '', timeOut: '', reason: '' });
+      fetchHistories(currentUser.id);
     } catch (error) {
       alert("Gagal mengirim perbaikan: " + error.message);
     } finally {
@@ -543,17 +684,30 @@ export default function MobileApp() {
       const dateString = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
 
       if (!hasAbsenMasuk) {
-        const { error } = await supabase.from('attendances').insert([{
-          employee_id: currentUser.id, date: dateString, check_in_time: timeString, location_gps: lokasiStr, photo_url: finalPhotoUrl, status: 'HADIR'
-        }]);
+        // PROSES 1: CHECK-IN SHIFT BARU (Jam Berapapun)
+        const payloadIn = {
+          client_id: currentUser.client_id, 
+          employee_id: currentUser.id, 
+          date: dateString, // Tanggal dimulainya shift
+          check_in_time: timeString, 
+          location_gps: lokasiStr, 
+          photo_url: finalPhotoUrl, 
+          status: 'HADIR'
+        };
+        const { error } = await supabase.from('attendances').insert([payloadIn]);
         if (error) throw error;
-        alert("Absen Masuk Berhasil!");
-      } else if (hasAbsenMasuk && !hasAbsenKeluar) {
-        const { error } = await supabase.from('attendances').update({ 
-          check_out_time: timeString, location_gps: lokasiStr, photo_out_url: finalPhotoUrl 
-        }).eq('id', absenId);
+        alert("Check-In Shift berhasil!");
+        
+      } else if (!hasAbsenKeluar && activeAttendanceId) {
+        // PROSES 2: CHECK-OUT SHIFT (Meskipun sudah beda hari, dia akan mengunci ke ID Shift Semalam)
+        const payloadOut = {
+          check_out_time: timeString,
+          photo_out_url: finalPhotoUrl
+          // Catatan: Kita tidak mengubah 'date', agar hitungan masuknya tetap di tanggal Shift dimulai.
+        };
+        const { error } = await supabase.from('attendances').update(payloadOut).eq('id', activeAttendanceId);
         if (error) throw error;
-        alert("Absen Keluar Berhasil! Hati-hati di jalan.");
+        alert("Check-Out Shift selesai. Selamat istirahat!");
       }
 
       checkTodayAttendance(currentUser.id);
@@ -572,6 +726,17 @@ export default function MobileApp() {
       setUploadingAvatar(true);
       const file = event.target.files[0];
       if (!file) return;
+
+      // --- PERBAIKAN: Hapus foto lama di Storage jika sudah ada ---
+      if (currentUser.avatar_url) {
+        const oldUrl = currentUser.avatar_url;
+        // Mengambil nama file asli dari URL panjang
+        const oldFileName = oldUrl.substring(oldUrl.lastIndexOf('/') + 1);
+        if (oldFileName) {
+          await supabase.storage.from('avatars').remove([oldFileName]);
+        }
+      }
+      // ------------------------------------------------------------
 
       const fileExt = file.name.split('.').pop();
       const fileName = `${currentUser.id}-${Math.random()}.${fileExt}`;
@@ -652,7 +817,9 @@ export default function MobileApp() {
                 <div className="bg-white rounded-2xl p-4 shadow-lg shadow-blue-900/5 border border-slate-100">
                   <div className="flex justify-between items-center mb-3 pb-3 border-b border-slate-100">
                     <h2 className="text-lg font-bold text-slate-800">Kehadiran</h2>
-                    <p className="text-xs font-semibold text-slate-500">Senin, 06 Juli 2026</p>
+                    <p className="text-xs font-semibold text-slate-500">
+                      {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                    </p>
                   </div>
                   <div className="flex justify-between items-center">
                     <div className="text-center w-1/2 border-r border-slate-100 flex flex-col items-center">
@@ -671,32 +838,91 @@ export default function MobileApp() {
             <main className="flex-1 overflow-y-auto px-5 py-4 z-10 scroll-smooth pb-24">
               <div className="mb-6">
                 <h3 className="font-bold text-slate-800 text-sm mb-3">Informasi dan Instruksi</h3>
-                <div className="w-full h-20 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-center text-slate-400 text-xs">Belum ada instruksi</div>
+                {/* TOMBOL BUAT INSTRUKSI KHUSUS DANRU/MANAGER/ADMIN */}
+                {['Komandan Regu', 'Manager Operasional', 'Admin Perusahaan'].includes(currentUser.role) && (
+                  <button onClick={() => setIsInstructionModalOpen(true)} className="mb-3 w-full bg-indigo-50 border border-indigo-200 text-indigo-700 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 active:scale-95 transition-transform"><Plus size={16}/> Buat Instruksi Lapangan</button>
+                )}
+
+                <div className="space-y-3">
+                  {instructions.map(inst => (
+                    <div key={inst.id} className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative">
+                      {inst.sender_id === currentUser.id && (
+                        <button onClick={() => handleDeleteInstruction(inst.id, inst.attachment_path)} className="absolute top-3 right-3 text-slate-400 hover:text-rose-500"><Trash2 size={14}/></button>
+                      )}
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-[10px]">{inst.employees?.nama_lengkap.substring(0,2).toUpperCase()}</div>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 flex items-center gap-2">
+                             {inst.employees?.nama_lengkap} 
+                             <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${inst.broadcast_type === 'Informasi' ? 'bg-indigo-100 text-indigo-700' : 'bg-rose-100 text-rose-700'}`}>{inst.broadcast_type || 'Instruksi'}</span>
+                          </p>
+                          <p className="text-[9px] text-slate-500">{inst.employees?.posisi_jabatan} • {new Date(inst.created_at).toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</p>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{inst.content}</p>
+                      {inst.attachment_url && (
+                        <a href={inst.attachment_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 bg-slate-50 text-blue-600 border border-slate-200 px-3 py-1.5 rounded text-[10px] font-bold">
+                          <FileText size={12}/> Buka Lampiran
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                  {instructions.length === 0 && <div className="w-full py-6 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-center text-slate-400 text-xs font-semibold">Belum ada pengumuman/instruksi.</div>}
+                </div>
               </div>
 
               <div className="mb-4">
                 <h3 className="font-bold text-slate-800 text-sm mb-3">Menu</h3>
                 <div className="grid grid-cols-4 gap-4 bg-white/90 backdrop-blur-md p-5 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
-                  {permissions?.reguler && (
+                  
+                  {/* Gembok Laporan Reguler */}
+                  {hasMobileMenu('laporan') && permissions?.reguler && (
                     <button onClick={() => { setLaporanTab('reguler'); setActiveMenu('laporan'); }} className="flex flex-col items-center gap-2 active:scale-95">
                       <div className="w-14 h-14 bg-gradient-to-br from-amber-50 to-amber-100/80 rounded-2xl flex items-center justify-center shadow-sm"><FileText size={24} className="text-yellow-600"/></div>
                       <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Reguler</span>
                     </button>
                   )}
-                  {permissions?.patroli && (
+
+                  {/* Gembok Laporan Patroli */}
+                  {hasMobileMenu('laporan') && permissions?.patroli && (
                     <button onClick={() => { setLaporanTab('patroli'); setActiveMenu('laporan'); }} className="flex flex-col items-center gap-2 active:scale-95">
                       <div className="w-14 h-14 bg-gradient-to-br from-amber-50 to-amber-100/80 rounded-2xl flex items-center justify-center shadow-sm"><ShieldAlert size={24} className="text-yellow-600"/></div>
                       <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Patroli</span>
                     </button>
                   )}
-                  <button onClick={() => setActiveMenu('pengajuan')} className="flex flex-col items-center gap-2 active:scale-95">
-                    <div className="w-14 h-14 bg-gradient-to-br from-indigo-50 to-indigo-100/80 rounded-2xl flex items-center justify-center shadow-sm"><FolderOpen size={24} className="text-indigo-600"/></div>
-                    <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Pengajuan</span>
-                  </button>
-                  <button onClick={() => setActiveMenu('ringkasan')} className="flex flex-col items-center gap-2 active:scale-95">
-                    <div className="w-14 h-14 bg-gradient-to-br from-emerald-50 to-emerald-100/80 rounded-2xl flex items-center justify-center shadow-sm"><History size={24} className="text-emerald-600"/></div>
-                    <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Ringkasan<br/>Absen</span>
-                  </button>
+
+                  {/* Gembok Pengajuan */}
+                  {hasMobileMenu('pengajuan') && (
+                    <button onClick={() => setActiveMenu('pengajuan')} className="flex flex-col items-center gap-2 active:scale-95">
+                      <div className="w-14 h-14 bg-gradient-to-br from-indigo-50 to-indigo-100/80 rounded-2xl flex items-center justify-center shadow-sm"><FolderOpen size={24} className="text-indigo-600"/></div>
+                      <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Pengajuan</span>
+                    </button>
+                  )}
+
+                  {/* Gembok Ringkasan Absen */}
+                  {hasMobileMenu('absen') && (
+                    <button onClick={() => setActiveMenu('ringkasan')} className="flex flex-col items-center gap-2 active:scale-95">
+                      <div className="w-14 h-14 bg-gradient-to-br from-emerald-50 to-emerald-100/80 rounded-2xl flex items-center justify-center shadow-sm"><History size={24} className="text-emerald-600"/></div>
+                      <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Ringkasan<br/>Absen</span>
+                    </button>
+                  )}
+
+                  {/* Tombol Tambahan: Task (Akan muncul jika dicentang di Admin) */}
+                  {hasMobileMenu('task') && (
+                    <button onClick={() => alert('Fitur Task sedang dalam pengembangan')} className="flex flex-col items-center gap-2 active:scale-95">
+                      <div className="w-14 h-14 bg-gradient-to-br from-blue-50 to-blue-100/80 rounded-2xl flex items-center justify-center shadow-sm"><CheckCircle2 size={24} className="text-blue-600"/></div>
+                      <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Task</span>
+                    </button>
+                  )}
+
+                  {/* Tombol Tambahan: Slip Gaji (Akan muncul jika dicentang di Admin) */}
+                  {hasMobileMenu('slip') && (
+                    <button onClick={() => alert('Fitur Slip Gaji sedang dalam pengembangan')} className="flex flex-col items-center gap-2 active:scale-95">
+                      <div className="w-14 h-14 bg-gradient-to-br from-rose-50 to-rose-100/80 rounded-2xl flex items-center justify-center shadow-sm"><CreditCard size={24} className="text-rose-600"/></div>
+                      <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Slip Gaji</span>
+                    </button>
+                  )}
+
                 </div>
               </div>
             </main>
@@ -1466,22 +1692,24 @@ export default function MobileApp() {
               </button>
             </div>
 
-            <div className="w-1/5"></div> 
+            <div className="w-1/5"></div>
+                <div className="flex w-2/5 justify-around pt-3">
+                  <button onClick={() => setActiveMenu('settings')} className="flex flex-col items-center gap-1 transition-colors">
+                    <User size={22} className={activeMenu === 'settings' ? "text-[#0a195c]" : "text-slate-400"} strokeWidth={2.5} />
+                    <span className={`text-[10px] font-bold ${activeMenu === 'settings' ? "text-[#0a195c]" : "text-slate-400"}`}>Profil</span>
+                  </button>
+                </div>
+              </nav>
 
-            <div className="flex w-2/5 justify-around pt-3">
-              <button onClick={() => setActiveMenu('settings')} className="flex flex-col items-center gap-1 transition-colors">
-                <User size={22} className={activeMenu === 'settings' ? "text-[#0a195c]" : "text-slate-400"} strokeWidth={2.5} />
-                <span className={`text-[10px] font-bold ${activeMenu === 'settings' ? "text-[#0a195c]" : "text-slate-400"}`}>Profil</span>
-              </button>
+              {/* BLOK TOMBOL KAMERA YANG SUDAH DIGEMBOK */}
+              {hasMobileMenu('absen') && (
+                <div className="absolute left-1/2 -translate-x-1/2 -top-8">
+                  <button onClick={() => { if (hasAbsenMasuk && hasAbsenKeluar) return alert("Anda sudah menyelesaikan shift hari ini."); setActiveMenu('absen'); }} className="w-16 h-16 bg-[#0a195c] rounded-full flex flex-col items-center justify-center shadow-[0_8px_20px_rgba(10,25,92,0.4)] active:scale-95 transition-transform border-[3px] border-[#F4F7FB] text-white">
+                    <Camera size={26} strokeWidth={2.5}/>
+                  </button>
+                </div>
+              )}
             </div>
-          </nav>
-
-          <div className="absolute left-1/2 -translate-x-1/2 -top-8">
-            <button onClick={() => { if (hasAbsenMasuk && hasAbsenKeluar) return alert("Anda sudah menyelesaikan shift hari ini."); setActiveMenu('absen'); }} className="w-16 h-16 bg-[#0a195c] rounded-full flex flex-col items-center justify-center shadow-[0_8px_20px_rgba(10,25,92,0.4)] active:scale-95 transition-transform border-[3px] border-[#F4F7FB] text-white">
-              <Camera size={26} strokeWidth={2.5}/>
-            </button>
-          </div>
-        </div>
         
         {/* ========================================== */}
         {/* === VIEW ABSENSI KAMERA (MODAL LAYAR PENUH) === */}
@@ -1539,6 +1767,59 @@ export default function MobileApp() {
             )}
           </div>
         </div>
+
+        {/* MODAL BUAT INSTRUKSI (DANRU) */}
+              {isInstructionModalOpen && (
+                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-center items-center p-4">
+                  <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-200">
+                    <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                      <h3 className="font-bold text-slate-800 text-sm">Buat Instruksi Lapangan</h3>
+                      <button onClick={() => setIsInstructionModalOpen(false)} className="p-1.5 bg-slate-200 text-slate-600 rounded-full active:scale-95"><X size={16}/></button>
+                    </div>
+
+                    <form onSubmit={handleCreateInstruction} className="p-5 space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Jenis Pesan</label>
+                        <select value={instForm.broadcast_type} onChange={e => setInstForm({...instForm, broadcast_type: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none">
+                          <option value="Instruksi">Instruksi Kerja (Tugas)</option>
+                          <option value="Informasi">Informasi (Pengumuman)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Target Penerima</label>
+                        <select value={instForm.target_type} onChange={e => setInstForm({...instForm, target_type: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none">
+                          <option value="LOCATION">Semua Anggota di Lokasi Ini</option>
+                          <option value="INDIVIDUAL">Pilih Perorangan (Bawahan)</option>
+                        </select>
+                      </div>
+                      {instForm.target_type === 'INDIVIDUAL' && (
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Pilih Bawahan</label>
+                          <select required value={instForm.target_val} onChange={e => setInstForm({...instForm, target_val: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none">
+                            <option value="">-- Pilih Anggota --</option>
+                            {/* FILTER SAKTI: HANYA TAMPILKAN NAMA YANG ID-NYA BUKAN ID MANAGER ITU SENDIRI */}
+                            {colleagues.filter(c => c.id !== currentUser.id).map(c => <option key={c.id} value={c.id}>{c.nama_lengkap}</option>)}
+                          </select>
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Isi Instruksi</label>
+                        <textarea required rows="4" value={instForm.content} onChange={e => setInstForm({...instForm, content: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none resize-none"></textarea>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Lampiran (File/Foto)</label>
+                        <input type="file" onChange={e => setInstForm({...instForm, file: e.target.files[0]})} className="w-full text-xs" />
+                      </div>
+
+                      <button type="submit" disabled={isSubmittingInst} className="w-full bg-[#0a195c] text-white font-bold py-3.5 rounded-xl active:scale-95 disabled:opacity-50">
+                        {isSubmittingInst ? 'Mengirim...' : 'Sebarkan Instruksi'}
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
       </div>
     </div>
   );

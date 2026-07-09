@@ -7,25 +7,33 @@ import {
   UserPlus, Database, QrCode, Download, CheckCircle2, 
   Trash2, MapPin, LayoutDashboard, Receipt, CreditCard, 
   TrendingUp, TrendingDown, Activity, BarChart3, Building, MessageSquare, Plus, Send, FolderTree, RefreshCw,
-  ClipboardCheck, Check, XCircle, History, Upload, UserX, Shield, Key, Briefcase, KeyRound 
+  ClipboardCheck, Check, XCircle, History, Upload, UserX, Shield, Key, Briefcase, KeyRound, CalendarClock
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase'; 
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 
 // TAMBAHKAN STRUKTUR DEFAULT PERMISSION DI BAWAH IMPORT:
 
 const defaultRolePermissions = {
   hris: { view: false, create: false, edit: false, delete: false },
+  shift: { view: false, create: false, edit: false, delete: false, export: false },
   task: { view: false, create: false, edit: false, delete: false },
   approval: { view: false, approve: false },
   laporan: { view: false, export: false },
   finance: { view: false, create: false, edit: false, delete: false },
-  settings: { view: false, edit: false }
+  settings: { view: false, edit: false },
+  broadcast: { view: false, create: false, delete: false },
+  mobile: { absen: true, laporan: true, pengajuan: true, task: false, slip: true }
 };
 
 const menuModules = [
   { id: 'hris', label: 'HRIS & Database', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'shift', label: 'Manajemen Jadwal Shift', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { id: 'broadcast', label: 'Informasi & Instruksi', actions: ['view', 'create', 'delete'] },
+  { id: 'mobile', label: 'Menu Aplikasi Mobile', actions: ['absen', 'laporan', 'pengajuan', 'task', 'slip'] },
   { id: 'task', label: 'Task Management', actions: ['view', 'create', 'edit', 'delete'] },
   { id: 'approval', label: 'Pusat Approval', actions: ['view', 'approve'] },
   { id: 'laporan', label: 'Laporan & Arsip', actions: ['view', 'export'] },
@@ -43,6 +51,13 @@ export default function ClientAdmin() {
   const [settingTab, setSettingTab] = useState('gps_rules');
   const [rekrutmenSubTab, setRekrutmenSubTab] = useState('PENDING');
 
+  // STATE MANAJEMEN SHIFT
+  const [shifts, setShifts] = useState([]);
+  const [filterShiftBulan, setFilterShiftBulan] = useState(new Date().toISOString().substring(0, 7));
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [shiftForm, setShiftForm] = useState({ id: null, employee_id: '', date: '', shift_type: 'Pagi', time_in: '08:00', time_out: '17:00' });
+  const importShiftRef = useRef(null);
+
   // STATE UNTUK DATABASE KARYAWAN
   const [searchDbQuery, setSearchDbQuery] = useState('');
   const [filterDbJabatan, setFilterDbJabatan] = useState('Semua');
@@ -59,6 +74,21 @@ export default function ClientAdmin() {
   // REF UNTUK IMPORT EXCEL MASSAL
   const importEmpRef = useRef(null);
   const importCandRef = useRef(null);
+
+  // STATE FILTER UNTUK TAB LAPORAN & APPROVAL
+  const [filterCutiName, setFilterCutiName] = useState('');
+  const [filterCutiStatus, setFilterCutiStatus] = useState('Semua');
+  const [filterCutiDate, setFilterCutiDate] = useState('');
+  
+  const [filterRmName, setFilterRmName] = useState('');
+  const [filterRmStatus, setFilterRmStatus] = useState('Semua');
+  const [filterRmDate, setFilterRmDate] = useState('');
+  
+  const [filterKoreksiName, setFilterKoreksiName] = useState('');
+  const [filterKoreksiStatus, setFilterKoreksiStatus] = useState('Semua');
+  const [filterKoreksiDate, setFilterKoreksiDate] = useState('');
+
+  const [isExporting, setIsExporting] = useState(false);
 
   // STATE UNTUK AB
   const navigate = useNavigate();
@@ -98,6 +128,12 @@ export default function ClientAdmin() {
   const [filterTanggal, setFilterTanggal] = useState('');
   const [isAbsenModalOpen, setIsAbsenModalOpen] = useState(false);
   const [absenForm, setAbsenForm] = useState({ id: null, employee_id: '', date: '', check_in_time: '', check_out_time: '', location_gps: '', photo_url: '', status: 'HADIR' });
+
+  // STATE INFORMASI & INSTRUKSI
+  const [instructions, setInstructions] = useState([]);
+  const [isBroadcastModalOpen, setIsBroadcastModalOpen] = useState(false);
+  const [broadcastForm, setBroadcastForm] = useState({ broadcast_type: 'Instruksi', target_type: 'ALL', target_val: '', content: '', file: null });
+  const [isSubmittingBroadcast, setIsSubmittingBroadcast] = useState(false);
 
   // STATE UNTUK CRUD KLIEN/CABANG & LOKASI (GEO-FENCING)
   const [clientsList, setClientsList] = useState([]);
@@ -140,54 +176,47 @@ export default function ClientAdmin() {
   }, []);
 
   // 2. UPDATE fetchAllData (Menggunakan Smart Detector & Isolasi Multi-Tenant)
+  // 2. UPDATE fetchAllData (Menggunakan Smart Detector & Isolasi Multi-Tenant)
   const fetchAllData = async (userId, sessionRole) => {
     try {
-      if (!userId) return;
+      const targetId = userId || currentUser.id;
+      if (!targetId) return;
 
       let myProfile = null;
-
-      // SMART DETECTOR: Cek apakah login menggunakan UUID atau NIK
-      const isValidUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
+      const isValidUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId);
       
       if (isValidUUID) {
-        const { data } = await supabase.from('employees').select('id, client_id, role').eq('id', userId).single();
+        const { data } = await supabase.from('employees').select('id, client_id, role').eq('id', targetId).single();
         myProfile = data;
       } else {
-        const { data } = await supabase.from('employees').select('id, client_id, role').eq('nik_karyawan', userId).single();
+        const { data } = await supabase.from('employees').select('id, client_id, role').eq('nik_karyawan', targetId).single();
         myProfile = data;
       }
 
-      if (!myProfile) {
-        console.warn("Profil tidak ditemukan! Cek koneksi atau database.");
-        return;
-      }
+      if (!myProfile) return; // Hentikan jika profil tidak ditemukan
 
       const myClientId = myProfile.client_id;
       const myRole = myProfile.role;
-      
-      // LOGIKA MULTI-TENANT: HANYA Super Admin/Developer yang bisa lihat semua data lintas perusahaan
       const isSuper = myRole === 'Super Admin' || myRole === 'Developer';
 
       setCurrentUser(prev => ({ ...prev, id: myProfile.id, client_id: myClientId, role: myRole }));
 
+      // =================================================================
+      // ALAT PENARIK DATA (WAJIB DIBUAT SEBELUM MENARIK DATA APAPUN)
+      // =================================================================
       const buildQuery = (tableName, selectQuery = '*') => {
         let q = supabase.from(tableName).select(selectQuery);
-        // Jika Admin Perusahaan, KUNCI data HANYA untuk client_id perusahaannya
         if (!isSuper && myClientId) q = q.eq('client_id', myClientId);
         return q;
       };
 
-      // 3. TARIK SEMUA DATA
-      const { data: candData } = await buildQuery('candidates').order('created_at', { ascending: false });
-      if (candData) setCandidates(candData);
+      // =================================================================
+      // PROSES PENARIKAN DATA
+      // =================================================================
+      const { data: empData } = await buildQuery('employees', '*, clients(name)').order('created_at', { ascending: false });
+      if (empData) setEmployees(empData);
 
-      const { data: empData } = await buildQuery('employees').order('created_at', { ascending: false });
-      if (empData) {
-        const filteredEmp = empData.filter(e => e.role !== 'Super Admin' && e.role !== 'Developer');
-        setEmployees(filteredEmp.map(e => ({ ...e, hasTaskAccess: e.has_task_access, hasMobileAccess: e.has_mobile_access })));
-      }
-
-      const { data: attData } = await buildQuery('attendances', '*, employees(nama_lengkap, lokasi_penempatan)').order('date', { ascending: false });
+      const { data: attData } = await buildQuery('attendances', '*, employees!inner(nama_lengkap, role, nik_karyawan, bidang_jasa)').order('date', { ascending: false });
       if (attData) setAttendances(attData);
 
       const { data: repData } = await buildQuery('field_reports', '*, employees(nama_lengkap)').order('created_at', { ascending: false });
@@ -227,6 +256,8 @@ export default function ClientAdmin() {
       
       const { data: locData } = await buildQuery('office_locations');
       if (locData) setOfficeLocations(locData);
+      const { data: instData } = await buildQuery('instructions', '*, employees!sender_id(nama_lengkap, posisi_jabatan)').order('created_at', { ascending: false });
+      if (instData) setInstructions(instData);
 
     } catch (error) {
       console.error("Gagal menarik data:", error);
@@ -242,10 +273,63 @@ export default function ClientAdmin() {
   }, []);
 
   // ==========================================
-  // FUNGSI IMPORT & EXPORT EXCEL MASSAL (KARYAWAN & PELAMAR)
+  // FUNGSI INFORMASI & INSTRUKSI
   // ==========================================
-  
-  // 1. EXPORT KARYAWAN
+  const handleCreateBroadcast = async (e) => {
+    e.preventDefault();
+    if (!broadcastForm.content) return alert("Isi instruksi tidak boleh kosong!");
+    setIsSubmittingBroadcast(true);
+
+    try {
+      let fileUrl = null;
+      let filePath = null;
+
+      if (broadcastForm.file) {
+        const file = broadcastForm.file;
+        const fileExt = file.name.split('.').pop();
+        filePath = `${currentUser.client_id}/${Date.now()}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage.from('instruction_files').upload(filePath, file);
+        if (uploadError) throw uploadError;
+        const { data } = supabase.storage.from('instruction_files').getPublicUrl(filePath);
+        fileUrl = data.publicUrl;
+      }
+
+      const payload = {
+        client_id: currentUser.client_id,
+        sender_id: currentUser.id,
+        broadcast_type: broadcastForm.broadcast_type,
+        target_type: broadcastForm.target_type,
+        target_val: broadcastForm.target_type === 'ALL' ? 'Semua' : broadcastForm.target_val,
+        content: broadcastForm.content,
+        attachment_url: fileUrl,
+        attachment_path: filePath
+      };
+
+      const { error } = await supabase.from('instructions').insert([payload]);
+      if (error) throw error;
+      alert("Instruksi berhasil disebarkan!");
+      setIsBroadcastModalOpen(false);
+      setBroadcastForm({ target_type: 'ALL', target_val: '', content: '', file: null });
+      fetchAllData();
+    } catch (err) {
+      alert("Gagal mengirim instruksi: " + err.message);
+    } finally {
+      setIsSubmittingBroadcast(false);
+    }
+  };
+
+  const handleDeleteBroadcast = async (id, filePath) => {
+    if (!window.confirm("Hapus instruksi ini? Lampiran file juga akan terhapus permanen dari server.")) return;
+    
+    // 1. Hapus File dari Storage (Jika Ada)
+    if (filePath) {
+      await supabase.storage.from('instruction_files').remove([filePath]);
+    }
+    // 2. Hapus Data dari Database
+    const { error } = await supabase.from('instructions').delete().eq('id', id);
+    if (!error) { alert("Instruksi terhapus!"); fetchAllData(); }
+  };
+
   // ==========================================
   // FUNGSI IMPORT & EXPORT EXCEL MASSAL (SUPER LENGKAP)
   // ==========================================
@@ -489,6 +573,406 @@ export default function ClientAdmin() {
   };
 
   // ==========================================
+  // FUNGSI EXCEL MANAJEMEN SHIFT
+  // ==========================================
+  const downloadTemplateShift = () => {
+    const templateData = [
+      { "NIK_KARYAWAN": "DEV-000", "TANGGAL(YYYY-MM-DD)": "2026-07-15", "TIPE_SHIFT": "Pagi", "JAM_MASUK(HH:MM)": "08:00", "JAM_KELUAR(HH:MM)": "17:00" },
+      { "NIK_KARYAWAN": "DEV-000", "TANGGAL(YYYY-MM-DD)": "2026-07-16", "TIPE_SHIFT": "Malam", "JAM_MASUK(HH:MM)": "22:00", "JAM_KELUAR(HH:MM)": "07:00" },
+      { "NIK_KARYAWAN": "ADM-001", "TANGGAL(YYYY-MM-DD)": "2026-07-15", "TIPE_SHIFT": "Libur", "JAM_MASUK(HH:MM)": "OFF", "JAM_KELUAR(HH:MM)": "OFF" }
+    ];
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template Jadwal Shift");
+    XLSX.writeFile(wb, "Template_Massal_Shift.xlsx");
+  };
+
+  const handleSaveShift = async (e) => {
+    e.preventDefault();
+    if(!shiftForm.employee_id || !shiftForm.date) return alert("Pilih pegawai dan tanggal!");
+
+    const payload = {
+      client_id: currentUser.client_id,
+      employee_id: shiftForm.employee_id,
+      date: shiftForm.date,
+      shift_type: shiftForm.shift_type,
+      time_in: shiftForm.time_in ? shiftForm.time_in + ':00' : null,
+      time_out: shiftForm.time_out ? shiftForm.time_out + ':00' : null
+    };
+
+    if (shiftForm.id) {
+      const { error } = await supabase.from('employee_shifts').update(payload).eq('id', shiftForm.id);
+      if (!error) { alert('Jadwal diperbarui!'); setIsShiftModalOpen(false); fetchAllData(); }
+      else alert('Gagal update: ' + error.message);
+    } else {
+      const { error } = await supabase.from('employee_shifts').upsert([payload], { onConflict: 'employee_id, date' });
+      if (!error) { alert('Jadwal berhasil ditambahkan!'); setIsShiftModalOpen(false); fetchAllData(); }
+      else alert('Gagal menambah jadwal: ' + error.message);
+    }
+  };
+
+  const handleImportShift = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const bstr = event.target.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
+
+      if (data.length === 0) return alert("Data kosong.");
+      if (!window.confirm(`Proses sinkronisasi ${data.length} jadwal shift? (Sistem otomatis mendeteksi shift baru / update shift lama)`)) return;
+
+      let successCount = 0; let errorCount = 0;
+      const { data: empData } = await supabase.from('employees').select('id, nik_karyawan').eq('client_id', currentUser.client_id);
+      
+      for (const row of data) {
+        const nik = String(row["NIK_KARYAWAN"]).trim();
+        const date = String(row["TANGGAL(YYYY-MM-DD)"]).trim();
+        const type = String(row["TIPE_SHIFT"]).trim();
+        let timeIn = String(row["JAM_MASUK(HH:MM)"]).trim();
+        let timeOut = String(row["JAM_KELUAR(HH:MM)"]).trim();
+
+        timeIn = timeIn && timeIn !== "OFF" ? (timeIn.length <= 5 ? `${timeIn}:00` : timeIn) : null;
+        timeOut = timeOut && timeOut !== "OFF" ? (timeOut.length <= 5 ? `${timeOut}:00` : timeOut) : null;
+
+        const employee = empData?.find(emp => emp.nik_karyawan === nik);
+        if (employee && date) {
+          const payload = {
+            client_id: currentUser.client_id, employee_id: employee.id, date: date, shift_type: type, time_in: timeIn, time_out: timeOut
+          };
+          const { error } = await supabase.from('employee_shifts').upsert([payload], { onConflict: 'employee_id, date' });
+          if (!error) successCount++; else errorCount++;
+        } else {
+          errorCount++;
+        }
+      }
+      alert(`Import Shift Selesai!\n✅ Berhasil: ${successCount}\n❌ Dilewati (NIK Salah): ${errorCount}`);
+      fetchAllData();
+      if(importShiftRef.current) importShiftRef.current.value = ''; 
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const exportShiftExcel = () => {
+    const filtered = shifts.filter(s => s.date.startsWith(filterShiftBulan));
+    if (filtered.length === 0) return alert("Data jadwal kosong di bulan ini.");
+    const dataToExport = filtered.map(s => ({
+      NIK: s.employees?.nik_karyawan,
+      Nama_Pegawai: s.employees?.nama_lengkap,
+      Tanggal: s.date,
+      Tipe_Shift: s.shift_type,
+      Jam_Masuk: s.time_in ? s.time_in.substring(0,5) : 'OFF',
+      Jam_Keluar: s.time_out ? s.time_out.substring(0,5) : 'OFF'
+    }));
+    const ws = XLSX.utils.json_to_sheet(dataToExport);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Jadwal Shift");
+    XLSX.writeFile(wb, `Jadwal_Shift_${filterShiftBulan}.xlsx`);
+  };
+
+  // 2. EXPORT LAPORAN LAPANGAN (EXCELJS - WITH REAL IMAGES & KOORDINAT)
+  const exportLaporanExcel = async () => {
+    const filteredReports = fieldReports.filter(r => {
+      const matchType = filterReportType === 'Semua' || r.report_type === filterReportType;
+      const matchName = (r.employees?.nama_lengkap || '').toLowerCase().includes(filterReportName.toLowerCase());
+      const matchDate = filterReportDate === '' || (r.created_at || '').startsWith(filterReportDate);
+      return (r.report_type === 'patroli' || r.report_type === 'reguler') && matchType && matchName && matchDate;
+    });
+
+    if (filteredReports.length === 0) return alert("Tidak ada data laporan untuk diekspor.");
+
+    setIsExporting(true);
+
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Laporan Lapangan');
+
+      worksheet.columns = [
+        { header: 'Waktu Laporan', key: 'time', width: 20 },
+        { header: 'Nama Pelapor', key: 'name', width: 25 },
+        { header: 'Tipe', key: 'type', width: 15 },
+        { header: 'Nama Lokasi (Geo-Fence)', key: 'locName', width: 30 },
+        { header: 'Koordinat (Lat, Lng)', key: 'coord', width: 25 },
+        { header: 'Judul Laporan', key: 'title', width: 30 },
+        { header: 'Keterangan / Catatan', key: 'notes', width: 50 },
+        { header: 'Foto 1', key: 'photo1', width: 15 },
+        { header: 'Foto 2', key: 'photo2', width: 15 },
+        { header: 'Foto 3', key: 'photo3', width: 15 }
+      ];
+
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+      for (let i = 0; i < filteredReports.length; i++) {
+         const r = filteredReports[i];
+         
+         let notesText = r.description;
+         let photosArr = [];
+         
+         if (r.photo_url) photosArr.push(r.photo_url);
+
+         try {
+           const parsed = JSON.parse(r.description);
+           if (parsed.notes) notesText = parsed.notes;
+           if (parsed.photos && Array.isArray(parsed.photos)) {
+              photosArr = parsed.photos.map(p => p.url);
+           }
+         } catch (e) {}
+
+         const locName = r.location_name || r.location_gps || 'Luar Area / Bebas'; 
+         const coord = (r.latitude && r.longitude) ? `${r.latitude}, ${r.longitude}` : 'Tidak Tercatat';
+
+         const row = worksheet.addRow({
+           time: new Date(r.created_at).toLocaleString('id-ID'),
+           name: r.employees?.nama_lengkap || 'Unknown',
+           type: r.report_type.toUpperCase(),
+           locName: locName,
+           coord: coord,
+           title: r.title,
+           notes: notesText
+         });
+
+         row.height = 80; 
+         row.alignment = { vertical: 'middle', wrapText: true };
+
+         for(let p = 0; p < Math.min(photosArr.length, 3); p++) {
+           const imgUrl = photosArr[p];
+           if(imgUrl) {
+             const base64Img = await getCompressedBase64Image(imgUrl);
+             if(base64Img) {
+               const imageId = workbook.addImage({ base64: base64Img, extension: 'jpeg' });
+               worksheet.addImage(imageId, {
+                  tl: { col: 7 + p, row: row.number - 1 },
+                  ext: { width: 70, height: 70 },
+                  editAs: 'oneCell'
+               });
+             }
+           }
+         }
+      }
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      saveAs(blob, `Laporan_${filterReportType === 'Semua' ? 'Patroli_Reguler' : filterReportType}_${new Date().getTime()}.xlsx`);
+      
+    } catch (err) {
+      alert("Terjadi kesalahan saat mengekspor laporan: " + err.message);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // 3. EXPORT CUTI & IZIN
+  const exportCutiExcel = () => {
+    const filtered = leaveRequests.filter(r => {
+      const matchName = (r.employees?.nama_lengkap || '').toLowerCase().includes(filterCutiName.toLowerCase());
+      const matchStatus = filterCutiStatus === 'Semua' || r.status === filterCutiStatus;
+      const matchDate = filterCutiDate === '' || r.created_at.startsWith(filterCutiDate);
+      return matchName && matchStatus && matchDate;
+    });
+    if (filtered.length === 0) return alert("Data kosong.");
+    const dataToExport = filtered.map(r => ({
+      Tgl_Pengajuan: new Date(r.created_at).toLocaleDateString('id-ID'),
+      Nama_Pegawai: r.employees?.nama_lengkap || 'Unknown',
+      Jenis_Izin: r.request_type,
+      Kategori: r.category,
+      Tgl_Mulai: r.start_date,
+      Tgl_Selesai: r.end_date,
+      Alasan: r.reason,
+      Status: r.status,
+      Catatan_HRD: r.admin_note || '-',
+      Link_Surat_Dokumen: r.attachment_url || '-'
+    }));
+    const ws = XLSX.utils.json_to_sheet(dataToExport);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Rekap Cuti Izin");
+    XLSX.writeFile(wb, `Rekap_Cuti_Izin_${new Date().getTime()}.xlsx`);
+  };
+
+  // 4. EXPORT REIMBURSEMENT
+  const exportReimburseExcel = () => {
+    const filtered = reimbursements.filter(r => {
+      const matchName = (r.employees?.nama_lengkap || '').toLowerCase().includes(filterRmName.toLowerCase());
+      const matchStatus = filterRmStatus === 'Semua' || r.status === filterRmStatus;
+      const matchDate = filterRmDate === '' || r.created_at.startsWith(filterRmDate);
+      return matchName && matchStatus && matchDate;
+    });
+    if (filtered.length === 0) return alert("Data kosong.");
+    const dataToExport = filtered.map(r => ({
+      Tgl_Pengajuan: new Date(r.created_at).toLocaleDateString('id-ID'),
+      Nama_Pegawai: r.employees?.nama_lengkap || 'Unknown',
+      Kategori_Biaya: r.category,
+      Nominal: r.amount,
+      Keterangan: r.description,
+      Status_Pencairan: r.status,
+      Catatan_Finance: r.admin_note || '-',
+      Link_Foto_Struk: r.receipt_url || '-'
+    }));
+    const ws = XLSX.utils.json_to_sheet(dataToExport);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Rekap Reimburse");
+    XLSX.writeFile(wb, `Rekap_Reimburse_${new Date().getTime()}.xlsx`);
+  };
+
+  // 5. EXPORT KOREKSI ABSEN
+  const exportKoreksiExcel = () => {
+    const filtered = attendanceCorrections.filter(r => {
+      const matchName = (r.employees?.nama_lengkap || '').toLowerCase().includes(filterKoreksiName.toLowerCase());
+      const matchStatus = filterKoreksiStatus === 'Semua' || r.status === filterKoreksiStatus;
+      const matchDate = filterKoreksiDate === '' || r.created_at.startsWith(filterKoreksiDate) || r.date === filterKoreksiDate;
+      return matchName && matchStatus && matchDate;
+    });
+    if (filtered.length === 0) return alert("Data kosong.");
+    const dataToExport = filtered.map(r => ({
+      Tgl_Pengajuan: new Date(r.created_at).toLocaleDateString('id-ID'),
+      Nama_Pegawai: r.employees?.nama_lengkap || 'Unknown',
+      Tgl_Absen_Dikomplain: r.date,
+      Tipe_Koreksi: r.correction_type,
+      Usulan_Jam_Masuk: r.time_in || '-',
+      Usulan_Jam_Keluar: r.time_out || '-',
+      Alasan_Koreksi: r.reason,
+      Status_Persetujuan: r.status,
+      Catatan_HRD: r.admin_note || '-'
+    }));
+    const ws = XLSX.utils.json_to_sheet(dataToExport);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Rekap Koreksi Absen");
+    XLSX.writeFile(wb, `Rekap_Koreksi_Absen_${new Date().getTime()}.xlsx`);
+  };
+
+  // ==========================================
+  // FUNGSI PENGECIL FOTO (AUTO-COMPRESS)
+  // ==========================================
+  const getCompressedBase64Image = async (imageUrl) => {
+    if (!imageUrl || !imageUrl.startsWith('http')) return null;
+    try {
+      const res = await fetch(imageUrl);
+      const blob = await res.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+           const img = new Image();
+           img.crossOrigin = 'Anonymous'; // Penting agar tidak error CORS
+           img.onload = () => {
+             const canvas = document.createElement('canvas');
+             // PERKECIL UKURAN MENJADI 60x60 PIXEL
+             const MAX_SIZE = 60;
+             const scale = Math.min(MAX_SIZE / img.width, MAX_SIZE / img.height);
+             canvas.width = img.width * scale;
+             canvas.height = img.height * scale;
+             
+             const ctx = canvas.getContext('2d');
+             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+             
+             // Kompres gambar menjadi JPEG dengan kualitas 50%
+             resolve(canvas.toDataURL('image/jpeg', 0.5)); 
+           };
+           img.onerror = () => resolve(null); // Lewati jika link foto rusak
+           img.src = reader.result;
+        };
+        reader.readAsDataURL(blob);
+      });
+    } catch (err) {
+      return null;
+    }
+  };
+
+  // 1. EXPORT ABSENSI (EXCELJS - WITH REAL IMAGES)
+  const exportAbsensiExcel = async () => {
+    const filteredData = attendances.filter(a => {
+      const matchNama = (a.employees?.nama_lengkap || '').toLowerCase().includes(filterNama.toLowerCase());
+      const matchLokasi = (a.location_gps || '').toLowerCase().includes(filterLokasi.toLowerCase());
+      const matchTanggal = filterTanggal === '' || a.date === filterTanggal;
+      return matchNama && matchLokasi && matchTanggal;
+    });
+
+    if (filteredData.length === 0) return alert("Tidak ada data absensi untuk diekspor.");
+
+    // Nyalakan status loading di tombol
+    setIsExporting(true);
+
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Laporan Absensi');
+
+      // Tentukan struktur dan lebar kolom
+      worksheet.columns = [
+        { header: 'Tanggal', key: 'date', width: 15 },
+        { header: 'Nama Pegawai', key: 'name', width: 25 },
+        { header: 'Divisi', key: 'div', width: 20 },
+        { header: 'Lokasi', key: 'loc', width: 30 },
+        { header: 'Jam Masuk', key: 'in', width: 12 },
+        { header: 'Jam Keluar', key: 'out', width: 12 },
+        { header: 'Status', key: 'status', width: 15 },
+        { header: 'Foto IN', key: 'photoIn', width: 12 }, // Kolom 8 (Index 7)
+        { header: 'Foto OUT', key: 'photoOut', width: 12 } // Kolom 9 (Index 8)
+      ];
+
+      // Format Header agar lebih rapi (Tebal & Tengah)
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+      // Mulai memproses setiap baris
+      for (let i = 0; i < filteredData.length; i++) {
+         const a = filteredData[i];
+         const row = worksheet.addRow({
+           date: a.date,
+           name: a.employees?.nama_lengkap || 'Unknown',
+           div: a.employees?.bidang_jasa || '-',
+           loc: a.location_gps,
+           in: a.check_in_time || '-',
+           out: a.check_out_time || '-',
+           status: a.status
+         });
+         
+         // Tinggikan baris menjadi 50 agar foto muat
+         row.height = 50; 
+         row.alignment = { vertical: 'middle' };
+         
+         // PROSES FOTO IN
+         if (a.photo_url) {
+            const base64In = await getCompressedBase64Image(a.photo_url);
+            if (base64In) {
+               const imageIdIn = workbook.addImage({ base64: base64In, extension: 'jpeg' });
+               worksheet.addImage(imageIdIn, {
+                  tl: { col: 7, row: row.number - 1 }, // Letakkan di kolom H
+                  ext: { width: 45, height: 45 }, // Ukuran fisik di dalam excel
+                  editAs: 'oneCell'
+               });
+            }
+         }
+         
+         // PROSES FOTO OUT
+         if (a.photo_out_url) {
+            const base64Out = await getCompressedBase64Image(a.photo_out_url);
+            if (base64Out) {
+               const imageIdOut = workbook.addImage({ base64: base64Out, extension: 'jpeg' });
+               worksheet.addImage(imageIdOut, {
+                  tl: { col: 8, row: row.number - 1 }, // Letakkan di kolom I
+                  ext: { width: 45, height: 45 },
+                  editAs: 'oneCell'
+               });
+            }
+         }
+      }
+
+      // Generate file Excel dan berikan ke user
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      saveAs(blob, `Laporan_Absen_${filterLokasi || 'Semua_Cabang'}_${new Date().getTime()}.xlsx`);
+      
+    } catch (err) {
+      alert("Terjadi kesalahan saat memproses gambar: " + err.message);
+    } finally {
+      // Matikan status loading
+      setIsExporting(false);
+    }
+  };
+
+  // ==========================================
   // FUNGSI CEK HAK AKSES (RBAC PROTECTOR)
   // ==========================================
   const hasPermission = (moduleId, action) => {
@@ -666,7 +1150,7 @@ export default function ClientAdmin() {
         await supabase.from('attendances').update(updatePayload).eq('id', existingAtt.id);
       } else {
         await supabase.from('attendances').insert([{
-          employee_id: reqTarget.employee_id, date: reqTarget.date, ...updatePayload,
+          client_id: currentUser.client_id, employee_id: reqTarget.employee_id, date: reqTarget.date, ...updatePayload,
           status: 'HADIR', location_gps: 'Koreksi Manual', photo_url: 'https://ui-avatars.com/api/?name=Manual'
         }]);
       }
@@ -868,6 +1352,7 @@ export default function ClientAdmin() {
   const handleCheckboxChange = (moduleId, action) => {
     setRoleForm(prev => {
       const newPerms = { ...prev.permissions };
+      if (!newPerms[moduleId]) newPerms[moduleId] = {}; // <--- SABUK PENGAMAN (Cegah Crash)
       newPerms[moduleId][action] = !newPerms[moduleId][action];
       // Jika view dimatikan, matikan juga semua aksi lain di modul itu
       if (action === 'view' && !newPerms[moduleId].view) {
@@ -918,8 +1403,13 @@ export default function ClientAdmin() {
   const handleDeleteClient = async (id) => {
     if (window.confirm("Hapus Klien/Cabang ini? Semua lokasi di dalamnya akan terpengaruh.")) {
       const { error } = await supabase.from('clients').delete().eq('id', id);
-      if (!error) fetchAllData();
-      else alert("Gagal hapus klien. Pastikan titik lokasi di dalamnya sudah dihapus lebih dulu.");
+      if (!error) {
+        alert("Cabang berhasil dihapus!");
+        setIsClientModalOpen(false);
+        fetchAllData();
+      } else {
+        alert("Gagal hapus klien. Pastikan titik lokasi di dalamnya sudah dihapus lebih dulu.");
+      }
     }
   };
 
@@ -958,88 +1448,105 @@ export default function ClientAdmin() {
     }
   };
 
-  // FUNGSI DOWNLOAD TEMPLATE EXCEL (CSV)
+  // ==========================================
+  // FUNGSI DOWNLOAD TEMPLATE & IMPORT ABSEN (EXCEL VERSION)
+  // ==========================================
+
+  // 1. FUNGSI DOWNLOAD TEMPLATE EXCEL
   const downloadTemplateAbsen = () => {
-    // Format kolom disederhanakan: NIK, Tanggal, Jam Masuk, Jam Keluar
-    const csvContent = "data:text/csv;charset=utf-8,NIK_KARYAWAN,TANGGAL(YYYY-MM-DD),JAM_MASUK(HH:MM),JAM_KELUAR(HH:MM)\n12345678,2026-07-06,08:00,17:00\n87654321,2026-07-06,07:50,17:10";
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "Template_Edit_Massal_Absensi.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const templateData = [
+      {
+        "NIK_KARYAWAN": "DEV-000",
+        "TANGGAL(YYYY-MM-DD)": "2026-07-06",
+        "JAM_MASUK(HH:MM)": "08:00",
+        "JAM_KELUAR(HH:MM)": "17:00"
+      },
+      {
+        "NIK_KARYAWAN": "ADM-001",
+        "TANGGAL(YYYY-MM-DD)": "2026-07-06",
+        "JAM_MASUK(HH:MM)": "07:50",
+        "JAM_KELUAR(HH:MM)": "17:10"
+      }
+    ];
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template Edit Absensi");
+    XLSX.writeFile(wb, "Template_Massal_Absensi.xlsx");
   };
 
-  // FUNGSI BACA DAN IMPORT DATA EXCEL (CSV)
+  // 2. FUNGSI BACA DAN IMPORT DATA EXCEL (SMART UPSERT)
   const handleImportAbsen = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const text = event.target.result;
-      const rows = text.split('\n').filter(row => row.trim() !== ''); // Pisahkan per baris
+      const bstr = event.target.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
       
-      if (rows.length <= 1) return alert("File kosong atau format salah.");
+      // { raw: false } penting agar format jam (08:00) dan tanggal terbaca sebagai teks, bukan angka desimal Excel
+      const data = XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
 
-      const dataRows = rows.slice(1); // Buang baris pertama (Header NIK, dll)
+      if (data.length === 0) return alert("File Excel kosong atau format salah.");
+      if (!window.confirm(`Sistem mendeteksi ${data.length} baris data absensi. Lanjutkan proses import?`)) return;
+
       let successCount = 0;
       let errorCount = 0;
 
-      // 1. Tarik master data karyawan untuk mencocokkan NIK ke employee_id
-      const { data: empData } = await supabase.from('employees').select('id, nik_karyawan');
-      if (!empData) return alert("Gagal menarik data master karyawan dari server.");
+      // Tarik master data karyawan untuk mencocokkan NIK ke employee_id
+      const { data: empData } = await supabase.from('employees').select('id, nik_karyawan').eq('client_id', currentUser.client_id);
+      if (!empData) return alert("Gagal menarik data master karyawan.");
 
-      // 2. Looping data dari file CSV
-      for (const row of dataRows) {
-        const cols = row.split(','); // Pisahkan antar kolom dengan koma
-        if (cols.length >= 4) {
-          const nik = cols[0].trim();
-          const date = cols[1].trim();
-          const timeIn = cols[2].trim();
-          const timeOut = cols[3].trim();
+      for (const row of data) {
+        const nik = String(row["NIK_KARYAWAN"]).trim();
+        const date = String(row["TANGGAL(YYYY-MM-DD)"]).trim();
+        // Bersihkan data waktu, kalau cuma "8:00" jadikan "08:00:00" untuk database
+        let timeIn = String(row["JAM_MASUK(HH:MM)"]).trim();
+        let timeOut = String(row["JAM_KELUAR(HH:MM)"]).trim();
+        
+        timeIn = timeIn && timeIn !== "undefined" ? (timeIn.length <= 5 ? `${timeIn}:00` : timeIn) : null;
+        timeOut = timeOut && timeOut !== "undefined" ? (timeOut.length <= 5 ? `${timeOut}:00` : timeOut) : null;
 
-          const employee = empData.find(emp => emp.nik_karyawan === nik);
-          
-          if (employee && date) {
-            // Cek apakah data absen di tanggal itu sudah ada di database
-            const { data: existingAtt } = await supabase.from('attendances')
-              .select('id').eq('employee_id', employee.id).eq('date', date).single();
+        const employee = empData.find(emp => emp.nik_karyawan === nik);
+        
+        if (employee && date && date !== "undefined") {
+          // Cek apakah data absen di tanggal itu sudah ada di database
+          const { data: existingAtt } = await supabase.from('attendances')
+            .select('id').eq('employee_id', employee.id).eq('date', date).maybeSingle();
 
-            let updatePayload = {};
-            if (timeIn) updatePayload.check_in_time = `${timeIn}:00`;
-            if (timeOut) updatePayload.check_out_time = `${timeOut}:00`;
+          let updatePayload = {};
+          if (timeIn) updatePayload.check_in_time = timeIn;
+          if (timeOut) updatePayload.check_out_time = timeOut;
 
-            if (existingAtt) {
-              // Jika sudah ada: UPDATE jamnya
-              const { error } = await supabase.from('attendances').update(updatePayload).eq('id', existingAtt.id);
-              if (!error) successCount++; else errorCount++;
-            } else {
-              // Jika belum ada sama sekali: INSERT data absen baru
-              const { error } = await supabase.from('attendances').insert([{
-                employee_id: employee.id,
-                client_id: currentUser.client_id,
-                date: date,
-                ...updatePayload,
-                status: 'HADIR',
-                location_gps: 'Import Massal Sistem',
-                photo_url: 'https://ui-avatars.com/api/?name=Import+Data' // Placeholder foto
-              }]);
-              if (!error) successCount++; else errorCount++;
-            }
+          if (existingAtt) {
+            // UPDATE: Jika sudah ada
+            const { error } = await supabase.from('attendances').update(updatePayload).eq('id', existingAtt.id);
+            if (!error) successCount++; else errorCount++;
           } else {
-            errorCount++; // Karyawan tidak ketemu atau format tanggal kosong
+            // INSERT: Jika belum ada sama sekali
+            const { error } = await supabase.from('attendances').insert([{
+              employee_id: employee.id,
+              client_id: currentUser.client_id,
+              date: date,
+              ...updatePayload,
+              status: 'HADIR',
+              location_gps: 'Import Massal Sistem',
+              photo_url: 'https://ui-avatars.com/api/?name=Import+Data'
+            }]);
+            if (!error) successCount++; else errorCount++;
           }
+        } else {
+          errorCount++; // Karyawan tidak ketemu atau format tanggal salah
         }
       }
 
-      alert(`Proses Import Selesai!\n✅ Berhasil: ${successCount} baris data\n❌ Gagal/Dilewati: ${errorCount} baris data (Pastikan NIK valid)`);
-      fetchAllData(); // Refresh UI tabel
-      if(importAbsenRef.current) importAbsenRef.current.value = ''; // Kosongkan file
+      alert(`Proses Import Selesai!\n✅ Berhasil: ${successCount} data\n❌ Gagal/Dilewati: ${errorCount} data (Pastikan NIK & Tanggal valid)`);
+      fetchAllData(); 
+      if(importAbsenRef.current) importAbsenRef.current.value = ''; 
     };
     
-    reader.readAsText(file); // Mulai eksekusi baca file
+    reader.readAsBinaryString(file); 
   };
 
   return (
@@ -1070,10 +1577,12 @@ export default function ClientAdmin() {
           
           {[
             { id: 'hris', icon: Users, label: 'HRIS Dashboard' },
+            { id: 'shift', icon: CalendarClock, label: 'Manajemen Shift' },
             { id: 'task', icon: CheckSquare, label: 'Task Management' },
             { id: 'approval', icon: ClipboardCheck, label: 'Pusat Approval' },
             { id: 'laporan', icon: FileText, label: 'Laporan & Pengajuan' },
-            { id: 'finance', icon: Wallet, label: 'Finance Dashboard' }
+            { id: 'finance', icon: Wallet, label: 'Finance Dashboard' },
+            { id: 'broadcast', icon: MessageSquare, label: 'Informasi & Instruksi' }
           ]
           .filter(item => hasPermission(item.id, 'view')) // PROTEKSI: Sembunyikan menu jika tidak ada hak 'View'
           .map((item) => (
@@ -1205,36 +1714,36 @@ export default function ClientAdmin() {
 
                 {hrisTab === 'absensi' && (
                   <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden fade-in space-y-4 p-4 md:p-5">
-                    <div className="flex flex-col md:flex-row justify-between gap-4 border-b border-slate-100 pb-4">
-                      <div className="flex flex-col md:flex-row gap-3 flex-1">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-4">
+                      <div className="flex flex-col md:flex-row gap-3 flex-1 w-full">
                         <div className="relative flex-1">
                           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                          <input type="text" placeholder="Cari Nama Pegawai..." value={filterNama} onChange={e => setFilterNama(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400"/>
+                          <input type="text" placeholder="Cari Nama Pegawai..." value={filterNama} onChange={e => setFilterNama(e.target.value)} className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-blue-400"/>
                         </div>
-                        <input type="text" placeholder="Filter Area Lokasi..." value={filterLokasi} onChange={e => setFilterLokasi(e.target.value)} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400"/>
-                        <input type="date" value={filterTanggal} onChange={e => setFilterTanggal(e.target.value)} className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400"/>
+                        {/* Filter Cabang/Lokasi */}
+                        <select value={filterLokasi} onChange={e => setFilterLokasi(e.target.value)} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-blue-400 font-semibold text-slate-600">
+                           <option value="">Semua Lokasi/Cabang</option>
+                           {[...new Set(officeLocations.map(l => l.name))].map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                        </select>
+                        <input type="date" value={filterTanggal} onChange={e => setFilterTanggal(e.target.value)} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-blue-400 text-slate-500"/>
                       </div>
-                      <div className="flex flex-wrap gap-2 shrink-0">
-                        <button onClick={downloadTemplateAbsen} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold transition-colors shadow-sm">
-                          Download Template CSV
-                        </button>
-                        
-                        {/* Input file yang disembunyikan */}
-                        <input type="file" accept=".csv" ref={importAbsenRef} onChange={handleImportAbsen} className="hidden" />
-                        
-                        {/* Gembok Hak Akses CREATE (Import) */}
+
+                      <div className="flex flex-wrap gap-2 shrink-0 w-full md:w-auto">
+                        {hasPermission('hris', 'export') && (
+                          <>
+                            <button onClick={exportAbsensiExcel} className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center gap-2 justify-center flex-1 md:flex-none">
+                              <Download size={14}/> Rekap Excel
+                            </button>
+                            <button onClick={downloadTemplateAbsen} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center justify-center">Template Excel</button>
+                          </>
+                        )}
                         {hasPermission('hris', 'create') && (
-                          <button onClick={() => importAbsenRef.current.click()} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-3 py-2 rounded-lg text-xs font-bold transition-colors shadow-sm flex items-center gap-1">
-                            <Upload size={14}/> Upload & Import Data
-                          </button>
+                          <>
+                            <input type="file" accept=".xlsx, .xls" ref={importAbsenRef} onChange={handleImportAbsen} className="hidden" />
+                            <button onClick={() => importAbsenRef.current.click()} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-3 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center gap-1 justify-center"><Upload size={14}/> Import Absen</button>
+                          </>
                         )}
                       </div>
-                      
-                      {/* Gembok Hak Akses EDIT (Edit Massal) */}
-                      {hasPermission('hris', 'edit') && (
-                        <button onClick={handleToggleMassEdit} className={`${isMassEditMode ? 'bg-amber-100 text-amber-700' : 'bg-amber-50 text-amber-600'} hover:bg-amber-100 px-3 py-2 rounded-lg text-xs font-bold transition-colors`}>{isMassEditMode ? 'Batal Edit' : 'Edit Massal Jam Absen'}</button>
-                      )}
-                      {isMassEditMode && <button onClick={handleSaveMassEdit} className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold shadow-md hover:bg-blue-700 transition-colors">Simpan Perubahan</button>}
                     </div>
                     
                     <div className="overflow-x-auto">
@@ -1313,12 +1822,18 @@ export default function ClientAdmin() {
                          </button>
                        </div>
                        
-                       {/* TOMBOL EXCEL REKRUTMEN */}
+                       {/* TOMBOL EXCEL REKRUTMEN TERPROTEKSI */}
                        <div className="flex gap-2">
-                          <button onClick={exportCandidatesExcel} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"><Download size={14}/> Export Data Pelamar</button>
+                          {hasPermission('hris', 'export') && (
+                            <button onClick={exportCandidatesExcel} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"><Download size={14}/> Export Data Pelamar</button>
+                          )}
                           
-                          <input type="file" accept=".xlsx, .xls" ref={importCandRef} onChange={handleImportCandidatesExcel} className="hidden" />
-                          <button onClick={() => importCandRef.current.click()} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"><Upload size={14}/> Import Massal (Offline)</button>
+                          {hasPermission('hris', 'create') && (
+                            <>
+                              <input type="file" accept=".xlsx, .xls" ref={importCandRef} onChange={handleImportCandidatesExcel} className="hidden" />
+                              <button onClick={() => importCandRef.current.click()} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"><Upload size={14}/> Import Massal (Offline)</button>
+                            </>
+                          )}
                        </div>
                     </div>
 
@@ -1756,6 +2271,67 @@ export default function ClientAdmin() {
               </div>
             )}
 
+            {/* MANAJEMEN SHIFT & JADWAL */}
+            {activeMenu === 'shift' && (
+              <div className="flex flex-col h-full fade-in">
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6 shrink-0">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Manajemen Jadwal Shift</h2>
+                    <p className="text-slate-500 text-sm mt-1">Atur jadwal kerja Karyawan, Satpam, atau Buruh (Mendukung lintas hari).</p>
+                  </div>
+                  <div className="flex gap-2">
+                    {hasPermission('shift', 'create') && (
+                      <>
+                        <input type="file" accept=".xlsx, .xls" ref={importShiftRef} onChange={handleImportShift} className="hidden" />
+                        <button onClick={() => { setShiftForm({ id: null, employee_id: '', date: '', shift_type: 'Pagi', time_in: '08:00', time_out: '17:00' }); setIsShiftModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2"><Plus size={14}/> Tambah Manual</button>
+                        <button onClick={() => importShiftRef.current.click()} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2"><Upload size={14}/> Import Jadwal (Excel)</button>
+                      </>
+                    )}
+                    {hasPermission('shift', 'export') && (
+                      <>
+                        <button onClick={downloadTemplateShift} className="bg-white border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors">Unduh Template</button>
+                        <button onClick={exportShiftExcel} className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-2"><Download size={14}/> Export Bulan Ini</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden flex flex-col flex-1 min-h-[400px]">
+                  <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                     <h3 className="font-bold text-slate-700 text-sm">Daftar Jadwal</h3>
+                     <input type="month" value={filterShiftBulan} onChange={e => setFilterShiftBulan(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-[#0a195c] outline-none" />
+                  </div>
+                  <div className="overflow-y-auto custom-scrollbar flex-1">
+                    <table className="w-full text-left">
+                      <thead className="bg-white border-b border-slate-100 text-[10px] font-black text-slate-400 uppercase tracking-wider sticky top-0 z-10">
+                        <tr><th className="px-6 py-4">Tanggal</th><th className="px-6 py-4">Nama & NIK</th><th className="px-6 py-4">Shift</th><th className="px-6 py-4">Jadwal Wajib (IN - OUT)</th><th className="px-6 py-4 text-center">Aksi</th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-sm">
+                        {shifts.filter(s => s.date.startsWith(filterShiftBulan)).map(shift => (
+                          <tr key={shift.id} className="hover:bg-slate-50">
+                            <td className="px-6 py-4 font-bold text-slate-600">{new Date(shift.date).toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short' })}</td>
+                            <td className="px-6 py-4">
+                              <span className="font-bold text-slate-800 block">{shift.employees?.nama_lengkap}</span>
+                              <span className="text-[10px] text-slate-400 font-semibold">{shift.employees?.nik_karyawan}</span>
+                            </td>
+                            <td className="px-6 py-4"><span className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-md border ${shift.shift_type === 'Libur' ? 'bg-rose-50 text-rose-600 border-rose-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200'}`}>{shift.shift_type}</span></td>
+                            <td className="px-6 py-4 font-black text-slate-700">{shift.time_in ? shift.time_in.substring(0,5) : 'OFF'} <span className="text-slate-400 mx-1">-</span> {shift.time_out ? shift.time_out.substring(0,5) : 'OFF'}</td>
+                            <td className="px-6 py-4 text-center">
+                              <button onClick={() => { setShiftForm({ id: shift.id, employee_id: shift.employee_id, date: shift.date, shift_type: shift.shift_type, time_in: shift.time_in ? shift.time_in.substring(0,5) : '', time_out: shift.time_out ? shift.time_out.substring(0,5) : '' }); setIsShiftModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><FileText size={16}/></button>
+                               {hasPermission('shift', 'delete') && (
+                                  <button onClick={async () => { if(window.confirm('Hapus jadwal ini?')) { await supabase.from('employee_shifts').delete().eq('id', shift.id); fetchAllData(); } }} className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100"><Trash2 size={16}/></button>
+                               )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {shifts.filter(s => s.date.startsWith(filterShiftBulan)).length === 0 && <div className="text-center py-10 text-slate-400 font-bold">Belum ada jadwal yang di-import untuk bulan ini.</div>}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* TASK MANAGEMENT */}
             {activeMenu === 'task' && (
               <div className="flex flex-col h-full fade-in">
@@ -1813,6 +2389,122 @@ export default function ClientAdmin() {
               </div>
             )}
 
+            {/* INFORMASI & INSTRUKSI */}
+            {activeMenu === 'broadcast' && (
+              <div className="flex flex-col h-full fade-in">
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6 shrink-0">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Informasi & Instruksi</h2>
+                    <p className="text-slate-500 text-sm mt-1">Sebarkan pengumuman atau instruksi kerja (Target: Global, Cabang, atau Individu).</p>
+                  </div>
+                  {hasPermission('broadcast', 'create') && (
+                    <button onClick={() => setIsBroadcastModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-md transition-all flex items-center justify-center gap-2">
+                      <Plus size={16}/> Buat Instruksi Baru
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pb-10">
+                  {instructions.map(inst => (
+                    <div key={inst.id} className="bg-white p-5 rounded-[1.5rem] border border-slate-200 shadow-sm flex flex-col h-full relative">
+                      {hasPermission('broadcast', 'delete') && (
+                        <button onClick={() => handleDeleteBroadcast(inst.id, inst.attachment_path)} className="absolute top-4 right-4 text-slate-400 hover:text-rose-500 p-1.5 bg-slate-50 rounded-lg"><Trash2 size={16}/></button>
+                      )}
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-bold">{inst.employees?.nama_lengkap.substring(0,2).toUpperCase()}</div>
+                        <div>
+                          <p className="text-sm font-bold text-slate-800">{inst.employees?.nama_lengkap}</p>
+                          <p className="text-[10px] text-slate-500 font-medium">{inst.employees?.posisi_jabatan} • {new Date(inst.created_at).toLocaleString('id-ID')}</p>
+                        </div>
+                      </div>
+                      <div className="mb-3 flex gap-2">
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase shadow-sm ${inst.broadcast_type === 'Informasi' ? 'bg-indigo-100 text-indigo-700' : 'bg-rose-100 text-rose-700'}`}>
+                          {inst.broadcast_type || 'Instruksi'}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase shadow-sm ${inst.target_type === 'ALL' ? 'bg-blue-100 text-blue-700' : inst.target_type === 'LOCATION' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                          Target: {inst.target_type === 'ALL' ? 'Semua Pegawai' : inst.target_type === 'LOCATION' ? `Cabang: ${inst.target_val}` : 'Perorangan'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap flex-1">{inst.content}</p>
+                      
+                      {inst.attachment_url && (
+                        <div className="mt-4 pt-3 border-t border-slate-100">
+                          <a href={inst.attachment_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 bg-slate-50 text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-slate-200 px-3 py-2 rounded-lg text-xs font-bold transition-colors">
+                            <FileText size={14}/> Lihat Lampiran File
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {instructions.length === 0 && <div className="col-span-2 p-10 text-center text-slate-400 font-bold">Belum ada pengumuman/instruksi.</div>}
+                </div>
+
+                {/* MODAL CREATE BROADCAST */}
+                {isBroadcastModalOpen && (
+                  <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[80] flex justify-center items-center p-4">
+                    <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
+                      <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                        <h3 className="font-black text-lg text-slate-800">Buat Instruksi Baru</h3>
+                        <button onClick={() => setIsBroadcastModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
+                      </div>
+                      <form onSubmit={handleCreateBroadcast} className="p-6 space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 mb-1.5">Jenis Pesan</label>
+                          <select value={broadcastForm.broadcast_type} onChange={e => setBroadcastForm({...broadcastForm, broadcast_type: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500">
+                            <option value="Instruksi">Instruksi Kerja (Tugas/Perintah)</option>
+                            <option value="Informasi">Informasi (Pengumuman Biasa)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 mb-1.5">Pilih Target Penerima</label>
+                          <select value={broadcastForm.target_type} onChange={e => setBroadcastForm({...broadcastForm, target_type: e.target.value, target_val: ''})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500">
+                            <option value="ALL">Semua Karyawan (Global)</option>
+                            <option value="LOCATION">Khusus Cabang / Lokasi Penempatan</option>
+                            <option value="INDIVIDUAL">Khusus Perorangan (Individu)</option>
+                          </select>
+                        </div>
+                        
+                        {broadcastForm.target_type === 'LOCATION' && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1.5">Pilih Cabang / Lokasi</label>
+                            <select required value={broadcastForm.target_val} onChange={e => setBroadcastForm({...broadcastForm, target_val: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500">
+                              <option value="">-- Pilih Lokasi --</option>
+                              {[...new Set(employees.map(e => e.lokasi_penempatan).filter(Boolean))].map(l => <option key={l} value={l}>{l}</option>)}
+                            </select>
+                          </div>
+                        )}
+
+                        {broadcastForm.target_type === 'INDIVIDUAL' && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1.5">Pilih Karyawan</label>
+                            <select required value={broadcastForm.target_val} onChange={e => setBroadcastForm({...broadcastForm, target_val: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500">
+                              <option value="">-- Pilih Karyawan --</option>
+                              {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.nama_lengkap} ({emp.posisi_jabatan})</option>)}
+                            </select>
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 mb-1.5">Isi Instruksi / Pengumuman</label>
+                          <textarea required rows="4" value={broadcastForm.content} onChange={e => setBroadcastForm({...broadcastForm, content: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-blue-500 resize-none"></textarea>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 mb-1.5">Lampiran (Opsional - PDF/Word/Excel/Foto)</label>
+                          <input type="file" onChange={e => setBroadcastForm({...broadcastForm, file: e.target.files[0]})} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs" />
+                        </div>
+
+                        <button type="submit" disabled={isSubmittingBroadcast} className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-md disabled:opacity-50">
+                          {isSubmittingBroadcast ? 'Mengirim...' : 'Kirim Instruksi'}
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* LAPORAN & PENGAJUAN */}
             {activeMenu === 'laporan' && (
               <div className="space-y-6 fade-in">
@@ -1842,18 +2534,29 @@ export default function ClientAdmin() {
                         {/* ========================================================= */}
                         {laporanTab === 'laporan_lapangan' && (
                           <>
-                            <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row gap-3">
-                              <div className="relative flex-1">
-                                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                                <input type="text" placeholder="Cari Nama Karyawan..." value={filterReportName} onChange={e => setFilterReportName(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] transition-colors"/>
+                            <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row justify-between items-center gap-4">
+                              <div className="flex flex-col md:flex-row gap-2 flex-1 w-full">
+                                <div className="relative flex-1">
+                                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                  <input type="text" placeholder="Cari Nama Pelapor..." value={filterReportName} onChange={e => setFilterReportName(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] transition-colors"/>
+                                </div>
+                                <input type="date" value={filterReportDate} onChange={e => setFilterReportDate(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] text-slate-500 transition-colors"/>
+                                <select value={filterReportType} onChange={e => setFilterReportType(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] font-bold text-slate-600 transition-colors">
+                                  <option value="Semua">Semua Tipe Laporan</option>
+                                  <option value="patroli">Khusus Patroli</option>
+                                  <option value="reguler">Khusus Reguler</option>
+                                </select>
                               </div>
-                              <input type="text" placeholder="Cari Judul Laporan..." value={filterReportTitle} onChange={e => setFilterReportTitle(e.target.value)} className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] transition-colors"/>
-                              <input type="date" value={filterReportDate} onChange={e => setFilterReportDate(e.target.value)} className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] text-slate-500 transition-colors"/>
-                              <select value={filterReportType} onChange={e => setFilterReportType(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-[#0a195c] font-bold text-slate-600 transition-colors cursor-pointer">
-                                <option value="Semua">Semua Tipe</option>
-                                <option value="patroli">Khusus Patroli</option>
-                                <option value="reguler">Khusus Reguler</option>
-                              </select>
+                              {/* TOMBOL EXPORT LAPORAN TERPROTEKSI */}
+                              {hasPermission('laporan', 'export') && (
+                                <button 
+                                  onClick={exportLaporanExcel} 
+                                  disabled={isExporting} 
+                                  className={`px-4 py-2 rounded-lg text-xs font-bold border flex items-center gap-2 shrink-0 w-full md:w-auto justify-center transition-colors ${isExporting ? 'bg-emerald-200 text-emerald-800 border-emerald-300 cursor-wait' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200'}`}
+                                >
+                                  <Download size={14}/> {isExporting ? 'Menyisipkan Foto Laporan...' : 'Rekap Laporan (Excel)'}
+                                </button>
+                              )}
                             </div>
                             
                             <table className="w-full text-left">
@@ -1958,8 +2661,18 @@ export default function ClientAdmin() {
                         {/* ========================================================= */}
                         {laporanTab === 'cuti' && (
                           <div className="overflow-x-auto animate-in fade-in">
-                            <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                              <h3 className="font-bold text-slate-700 text-sm flex items-center gap-2"><FileText size={16} className="text-slate-400"/> Arsip Seluruh Pengajuan Izin & Cuti</h3>
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 flex flex-col md:flex-row items-center justify-between gap-4">
+                              <div className="flex flex-col md:flex-row gap-2 flex-1 w-full">
+                                 <input type="text" placeholder="Cari Karyawan..." value={filterCutiName} onChange={e => setFilterCutiName(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400 flex-1" />
+                                 <input type="date" value={filterCutiDate} onChange={e => setFilterCutiDate(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none text-slate-500 flex-1 md:max-w-[200px]" />
+                                 <select value={filterCutiStatus} onChange={e => setFilterCutiStatus(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none font-bold text-slate-600 flex-1 md:max-w-[180px]">
+                                   <option value="Semua">Semua Status</option><option value="PENDING">Menunggu</option><option value="APPROVED">Disetujui</option><option value="REJECTED">Ditolak</option>
+                                 </select>
+                              </div>
+                              {/* Ganti tombolnya menjadi: */}
+                              {hasPermission('laporan', 'export') && (
+                                <button onClick={exportCutiExcel} className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-4 py-2 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-2 shrink-0 w-full md:w-auto justify-center"><Download size={14}/> Export Excel</button>
+                              )}
                             </div>
                             <table className="w-full text-left">
                               <thead className="bg-white border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
@@ -1994,8 +2707,18 @@ export default function ClientAdmin() {
                         {/* ========================================================= */}
                         {laporanTab === 'reimburse' && (
                           <div className="overflow-x-auto animate-in fade-in">
-                            <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                              <h3 className="font-bold text-slate-700 text-sm flex items-center gap-2"><CreditCard size={16} className="text-slate-400"/> Arsip Seluruh Reimbursement</h3>
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 flex flex-col md:flex-row items-center justify-between gap-4">
+                              <div className="flex flex-col md:flex-row gap-2 flex-1 w-full">
+                                 <input type="text" placeholder="Cari Karyawan..." value={filterRmName} onChange={e => setFilterRmName(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400 flex-1" />
+                                 <input type="date" value={filterRmDate} onChange={e => setFilterRmDate(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none text-slate-500 flex-1 md:max-w-[200px]" />
+                                 <select value={filterRmStatus} onChange={e => setFilterRmStatus(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none font-bold text-slate-600 flex-1 md:max-w-[180px]">
+                                   <option value="Semua">Semua Status</option><option value="PENDING">Menunggu</option><option value="APPROVED">Dicairkan</option><option value="REJECTED">Ditolak</option>
+                                 </select>
+                              </div>
+                              {/* Ganti tombolnya menjadi: */}
+                              {hasPermission('laporan', 'export') && (
+                                <button onClick={exportReimburseExcel} className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-4 py-2 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-2 shrink-0 w-full md:w-auto justify-center"><Download size={14}/> Rekap Excel</button>
+                              )}
                             </div>
                             <table className="w-full text-left">
                               <thead className="bg-white border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
@@ -2030,8 +2753,17 @@ export default function ClientAdmin() {
                         {/* ========================================================= */}
                         {laporanTab === 'koreksi' && (
                           <div className="overflow-x-auto animate-in fade-in">
-                            <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                              <h3 className="font-bold text-slate-700 text-sm flex items-center gap-2"><Clock size={16} className="text-slate-400"/> Arsip Seluruh Perbaikan Absen</h3>
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 flex flex-col md:flex-row items-center justify-between gap-4">
+                              <div className="flex gap-2 flex-1 w-full">
+                                 <input type="text" placeholder="Cari Karyawan..." value={filterKoreksiName} onChange={e => setFilterKoreksiName(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-400 flex-1" />
+                                 <select value={filterKoreksiStatus} onChange={e => setFilterKoreksiStatus(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none font-bold text-slate-600">
+                                   <option value="Semua">Semua Status</option><option value="PENDING">Menunggu</option><option value="APPROVED">Disetujui</option><option value="REJECTED">Ditolak</option>
+                                 </select>
+                              </div>
+                              {/* Ganti tombolnya menjadi: */}
+                              {hasPermission('laporan', 'export') && (
+                                <button onClick={exportKoreksiExcel} className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-4 py-2 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-2 shrink-0 w-full md:w-auto justify-center"><Download size={14}/> Rekap History (Excel)</button>
+                              )}
                             </div>
                             <table className="w-full text-left">
                               <thead className="bg-white border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
@@ -2148,7 +2880,7 @@ export default function ClientAdmin() {
                                  <button onClick={() => { 
                                    setSelectedEmployeeAccess(emp); 
                                    const perms = typeof emp.permissions === 'string' ? JSON.parse(emp.permissions) : (emp.permissions || {});
-                                   setEditPermissions({ patroli: !!perms.patroli, reguler: !!perms.reguler, cuti: !!perms.cuti, koreksi: !!perms.koreksi, reimburse: !!perms.reimburse, bebas_gps: !!perms.bebas_gps });
+                                   setEditPermissions({ patroli: !!perms.patroli, reguler: !!perms.reguler, cuti: !!perms.cuti, koreksi: !!perms.koreksi, reimburse: !!perms.reimburse, bebas_gps: !!perms.bebas_gps, mobile: perms.mobile || {} });
                                    setIsAccessModalOpen(true); 
                                  }} className="px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg text-xs font-bold transition-colors">Atur Akses</button>
                                 )}
@@ -2195,7 +2927,13 @@ export default function ClientAdmin() {
                            <p className="text-xs text-slate-500 font-medium mb-4 flex-1 line-clamp-3">{role.description || 'Tidak ada deskripsi.'}</p>
                            {hasPermission('settings', 'edit') && (
                             <div className="flex gap-2 mt-auto">
-                             <button onClick={() => { setRoleForm({ id: role.id, name: role.name, description: role.description, permissions: typeof role.permissions === 'string' ? JSON.parse(role.permissions) : role.permissions }); setIsRoleModalOpen(true); }} className="flex-1 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold border border-indigo-100 transition-colors">Edit Akses</button>
+                             <button onClick={() => { 
+                               const existingPerms = typeof role.permissions === 'string' ? JSON.parse(role.permissions) : (role.permissions || {});
+                               const mergedPerms = JSON.parse(JSON.stringify(defaultRolePermissions));
+                               Object.keys(existingPerms).forEach(k => { mergedPerms[k] = { ...mergedPerms[k], ...existingPerms[k] }; });
+                               setRoleForm({ id: role.id, name: role.name, description: role.description, permissions: mergedPerms }); 
+                               setIsRoleModalOpen(true); 
+                             }} className="flex-1 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold border border-indigo-100 transition-colors">Edit Akses</button>
                              <button onClick={async () => { if(window.confirm("Hapus role ini?")) { await supabase.from('company_roles').delete().eq('id', role.id); fetchAllData(); } }} className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl border border-rose-100 transition-colors"><Trash2 size={16}/></button>
                             </div>
                            )}
@@ -2372,6 +3110,31 @@ export default function ClientAdmin() {
                       <span className="text-sm font-bold text-slate-700">Reimbursement</span>
                       <input type="checkbox" checked={editPermissions.reimburse} onChange={(e) => setEditPermissions({...editPermissions, reimburse: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300" />
                     </label>
+                  </div>
+                </div>
+
+                {/* Otoritas Menu Mobile App (Override Perorangan) */}
+                <div>
+                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Override Menu Mobile App</h4>
+                  <div className="grid grid-cols-2 gap-2">
+                    {['absen', 'laporan', 'pengajuan', 'task', 'slip'].map(menu => {
+                      let isChecked = false;
+                      if (editPermissions?.mobile && editPermissions.mobile[menu] !== undefined) {
+                         isChecked = editPermissions.mobile[menu];
+                      } else {
+                         const role = selectedEmployeeAccess?.role;
+                         const roleData = companyRoles.find(r => r.name === role);
+                         if (roleData) {
+                           const perms = typeof roleData.permissions === 'string' ? JSON.parse(roleData.permissions) : roleData.permissions;
+                           isChecked = perms?.mobile?.[menu] || false;
+                         }
+                      }
+                      return (
+                      <label key={menu} className="flex items-center gap-2 p-2.5 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
+                        <input type="checkbox" checked={isChecked} onChange={(e) => setEditPermissions({...editPermissions, mobile: {...(editPermissions.mobile || {}), [menu]: e.target.checked}})} className="w-4 h-4 text-blue-600 rounded border-slate-300" />
+                        <span className="text-xs font-bold text-slate-700 capitalize">Menu {menu}</span>
+                      </label>
+                    )})}
                   </div>
                 </div>
 
@@ -2751,11 +3514,37 @@ export default function ClientAdmin() {
                             </tr>
                           ))}
                         </tbody>
-                      </table>
+                        </table>
+                    </div>
+                    {/* AKSES MENU APLIKASI MOBILE (BAWAAN ROLE) */}
+                      <div className="mt-6">
+                        <h4 className="text-xs font-black text-slate-800 uppercase mb-3">Akses Menu Aplikasi Mobile (Bawaan Role)</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                          {['absen', 'laporan', 'pengajuan', 'task', 'slip'].map(menu => (
+                            <label key={menu} className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2.5 rounded-lg cursor-pointer hover:bg-slate-100 transition-colors">
+                              <input 
+                                type="checkbox" 
+                                checked={roleForm.permissions?.mobile?.[menu] || false}
+                                onChange={(e) => setRoleForm(prev => ({
+                                  ...prev,
+                                  permissions: {
+                                    ...prev.permissions,
+                                    mobile: {
+                                      ...(prev.permissions.mobile || {}),
+                                      [menu]: e.target.checked
+                                    }
+                                  }
+                                }))}
+                                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                              />
+                              <span className="text-xs font-bold text-slate-700 capitalize">Menu {menu}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                </div>
                 <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-end gap-3 shrink-0">
                   <button type="button" onClick={() => setIsRoleModalOpen(false)} className="px-5 py-3 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Batal</button>
                   <button type="submit" className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-indigo-600/20">Simpan Hak Akses</button>
@@ -2765,6 +3554,53 @@ export default function ClientAdmin() {
           </div>
         )}
 
+        {/* MODAL TAMBAH/EDIT SHIFT MANUAL */}
+        {isShiftModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex justify-center items-center p-4">
+            <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
+              <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><CalendarClock size={20} className="text-blue-600"/> {shiftForm.id ? 'Edit Shift' : 'Tambah Shift Manual'}</h3>
+                <button type="button" onClick={() => setIsShiftModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
+              </div>
+              <form onSubmit={handleSaveShift} className="flex flex-col">
+                <div className="p-6 space-y-4 overflow-y-auto bg-white max-h-[70vh]">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Pilih Karyawan</label>
+                    <select required disabled={!!shiftForm.id} value={shiftForm.employee_id} onChange={e => setShiftForm({...shiftForm, employee_id: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50">
+                       <option value="">-- Pilih Pegawai --</option>
+                       {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.nama_lengkap} ({emp.nik_karyawan})</option>)}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Tanggal</label>
+                      <input required disabled={!!shiftForm.id} type="date" value={shiftForm.date} onChange={e => setShiftForm({...shiftForm, date: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Tipe Shift</label>
+                      <input required type="text" placeholder="Cth: Pagi / Malam" value={shiftForm.shift_type} onChange={e => setShiftForm({...shiftForm, shift_type: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Jam Masuk</label>
+                      <input type="time" value={shiftForm.time_in} onChange={e => setShiftForm({...shiftForm, time_in: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Jam Keluar</label>
+                      <input type="time" value={shiftForm.time_out} onChange={e => setShiftForm({...shiftForm, time_out: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-400 italic mt-1">*Kosongkan jam masuk/keluar jika Tipe Shift adalah Libur/Off.</p>
+                </div>
+                <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+                  <button type="button" onClick={() => setIsShiftModalOpen(false)} className="px-5 py-3 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Batal</button>
+                  <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20">Simpan Shift</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* MOBILE BOTTOM NAVIGATION (PROTECTED) */}
