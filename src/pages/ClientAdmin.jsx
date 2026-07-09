@@ -83,6 +83,11 @@ export default function ClientAdmin() {
   const [shiftForm, setShiftForm] = useState({ id: null, employee_id: '', date: '', shift_type: 'Pagi', time_in: '08:00', time_out: '17:00' });
   const importShiftRef = useRef(null);
 
+  // State & Ref untuk fitur ambil foto langsung dari kamera
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+
   // STATE UNTUK DATABASE KARYAWAN
   const [searchDbQuery, setSearchDbQuery] = useState('');
   const [filterDbJabatan, setFilterDbJabatan] = useState('Semua');
@@ -114,6 +119,11 @@ export default function ClientAdmin() {
   const [filterKoreksiDate, setFilterKoreksiDate] = useState('');
 
   const [isExporting, setIsExporting] = useState(false);
+
+  // KEYWORD_PROFILE_REFI: State untuk modal Profil
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState({ password: '', file: null, avatar_url: '', avatar_path: '' });
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
   // STATE UNTUK AB
   const navigate = useNavigate();
@@ -194,7 +204,13 @@ export default function ClientAdmin() {
     const safeName = parsedSession.name || 'User'; 
     const initials = safeName.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
     
-    setCurrentUser({ ...parsedSession, avatar: initials, client_id: null });
+    setCurrentUser({ 
+      ...parsedSession, 
+      avatar: initials, 
+      avatar_url: parsedSession.avatar_url, 
+      avatar_path: parsedSession.avatar_path, 
+      client_id: null 
+    });
 
     // CRITICAL: Panggil fungsi langsung menggunakan data dari session (Mencegah ID Kosong)
     fetchAllData(parsedSession.id, parsedSession.role);
@@ -210,20 +226,30 @@ export default function ClientAdmin() {
       const isValidUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId);
       
       if (isValidUUID) {
-        const { data } = await supabase.from('employees').select('id, client_id, role').eq('id', targetId).single();
+        const { data } = await supabase.from('employees').select('id, client_id, role, clients(status, features)').eq('id', targetId).single();
         myProfile = data;
       } else {
-        const { data } = await supabase.from('employees').select('id, client_id, role').eq('nik_karyawan', targetId).single();
+        const { data } = await supabase.from('employees').select('id, client_id, role, clients(status, features)').eq('nik_karyawan', targetId).single();
         myProfile = data;
       }
 
       if (!myProfile) return; // Hentikan jika profil tidak ditemukan
 
+      // PROTEKSI SAAS: TENDANG KELUAR JIKA PERUSAHAAN DI-SUSPEND
+      if (myProfile.clients && myProfile.clients.status === 'SUSPENDED') {
+         alert("Layanan SaaS untuk Perusahaan Anda sedang ditangguhkan (SUSPENDED). Akses dibekukan sementara. Silakan hubungi Provider.");
+         localStorage.removeItem('vest_user_session');
+         navigate('/');
+         return; // Hentikan semua proses penarikan data
+      }
+
       const myClientId = myProfile.client_id;
       const myRole = myProfile.role;
       const isSuper = myRole === 'Super Admin' || myRole === 'Developer';
 
-      setCurrentUser(prev => ({ ...prev, id: myProfile.id, client_id: myClientId, role: myRole }));
+      // Tambahkan ? setelah myProfile agar tidak error jika data sempat kosong
+      const clientFeatures = myProfile?.clients?.features || {};
+      setCurrentUser(prev => ({ ...prev, id: myProfile?.id, client_id: myClientId, role: myRole, features: clientFeatures }));
 
       // =================================================================
       // ALAT PENARIK DATA (WAJIB DIBUAT SEBELUM MENARIK DATA APAPUN)
@@ -1000,17 +1026,22 @@ export default function ClientAdmin() {
   // FUNGSI CEK HAK AKSES (RBAC PROTECTOR)
   // ==========================================
   const hasPermission = (moduleId, action) => {
-    // 1. Jalur Tol (Bypass) HANYA untuk role sistem utama
+    // 1. BLOKIR DARI SUPER ADMIN (Gunakan tanda tanya / optional chaining agar aman dari null)
+    if (currentUser?.features?.[moduleId] === false) {
+      return false;
+    }
+
+    // 2. Jalur Tol (Bypass) HANYA untuk role sistem utama
     const superRoles = ['Admin Perusahaan', 'Super Admin', 'Developer'];
-    const currentRole = currentUser.role ? currentUser.role.trim() : '';
+    const currentRole = currentUser?.role ? currentUser.role.trim() : '';
 
     if (superRoles.includes(currentRole)) return true;
 
-    // 2. Cari profil role user di database
-    const userRole = companyRoles.find(r => r.id === currentRole || r.name === currentRole);
-    if (!userRole) return false; // Default: Kunci akses jika tidak ada role
+    // 3. Cari profil role user di database
+    const userRole = companyRoles?.find(r => r.id === currentRole || r.name === currentRole);
+    if (!userRole) return false; 
     
-    // 3. Cek matriks izin (checkbox)
+    // 4. Cek matriks izin (checkbox dari menu Konfigurasi Role)
     const perms = typeof userRole.permissions === 'string' ? JSON.parse(userRole.permissions) : userRole.permissions;
     return perms?.[moduleId]?.[action] === true;
   };
@@ -1347,6 +1378,118 @@ export default function ClientAdmin() {
     setExpandedLocations(prev => ({...prev, [loc]: !prev[loc]}));
   };
 
+  // KEYWORD_CAMERA_REFI: Fungsi untuk mengaktifkan kamera stream
+  const startCamera = async () => {
+    setIsCameraActive(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: "user", width: 400, height: 400 } 
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      alert("Tidak dapat mengakses kamera: " + err.message);
+      setIsCameraActive(false);
+    }
+  };
+
+  // KEYWORD_CAMERA_REFI: Fungsi untuk mematikan stream kamera
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    setIsCameraActive(false);
+  };
+
+  // KEYWORD_CAMERA_REFI: Fungsi mengambil gambar dari video stream dan menjadikannya File Object
+  const capturePhoto = () => {
+    if (videoRef.current) {
+      const canvas = document.createElement('canvas');
+      // Set ukuran canvas mengikuti resolusi video asli
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      
+      const ctx = canvas.getContext('2d');
+      // Balik gambar jika ingin efek cermin (opsional)
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      
+      // Ubah canvas menjadi blob, lalu bungkus menjadi File Object agar bisa diupload ke Supabase
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const file = new File([blob], `capture_${Date.now()}.jpeg`, { type: 'image/jpeg' });
+          setProfileForm(prev => ({ ...prev, file: file }));
+          stopCamera(); // Matikan kamera setelah foto berhasil diambil
+        }
+      }, 'image/jpeg', 0.85); // Kualitas kompresi 85%
+    }
+  };
+
+  // KEYWORD_PROFILE_REFI: Fungsi update profil (Foto & Password)
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    setIsUpdatingProfile(true);
+    try {
+      let newAvatarUrl = profileForm.avatar_url;
+      let newAvatarPath = profileForm.avatar_path;
+
+      // 1. Jika user memilih file foto baru
+      if (profileForm.file) {
+        const file = profileForm.file;
+        const fileExt = file.name.split('.').pop();
+        const filePath = `avatars/${currentUser.id}_${Date.now()}.${fileExt}`;
+
+        // Hapus foto lama dari storage Supabase agar tidak numpuk (replace)
+        if (profileForm.avatar_path) {
+          await supabase.storage.from('avatars').remove([profileForm.avatar_path]);
+        }
+
+        // Upload foto baru ke bucket 'avatars'
+        const { error: uploadError } = await supabase.storage.from('avatars').upload(filePath, file);
+        if (uploadError) throw uploadError;
+
+        // Ambil Public URL dari Supabase
+        const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
+        newAvatarUrl = data.publicUrl;
+        newAvatarPath = filePath;
+      }
+
+      // 2. Siapkan payload data yang akan diupdate
+      const payload = {};
+      if (profileForm.password && profileForm.password.trim() !== '') {
+        payload.password = profileForm.password;
+      }
+
+      // Ambil personal_data lama agar datanya tidak hilang tertimpa
+      const { data: empData } = await supabase.from('employees').select('personal_data').eq('id', currentUser.id).single();
+      const existingPD = typeof empData?.personal_data === 'string' ? JSON.parse(empData.personal_data || '{}') : (empData?.personal_data || {});
+      
+      // Sisipkan data foto ke dalam JSON personal_data
+      payload.personal_data = { ...existingPD, avatar_url: newAvatarUrl, avatar_path: newAvatarPath };
+
+      // 3. Update database tabel employees
+      const { error } = await supabase.from('employees').update(payload).eq('id', currentUser.id);
+      if (error) throw error;
+
+      // 4. Update Sesi Lokal agar foto di header langsung berubah tanpa harus refresh
+      const session = JSON.parse(localStorage.getItem('vest_user_session') || '{}');
+      session.avatar_url = newAvatarUrl;
+      session.avatar_path = newAvatarPath;
+      localStorage.setItem('vest_user_session', JSON.stringify(session));
+      
+      setCurrentUser(prev => ({ ...prev, avatar_url: newAvatarUrl, avatar_path: newAvatarPath }));
+      setIsProfileModalOpen(false);
+      alert("Profil Anda berhasil diperbarui!");
+
+    } catch (err) {
+      alert("Gagal update profil: " + err.message);
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('vest_user_session');
     navigate('/');
@@ -1653,19 +1796,28 @@ export default function ClientAdmin() {
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
         
         <header className="hidden md:flex items-center justify-between px-8 py-4 bg-white border-b border-slate-200 z-10 shrink-0">
-          <div className="relative w-96">
-            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input type="text" placeholder="Cari data..." className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all" />
-          </div>
+          
+          <div></div>
           
           <div className="flex items-center gap-4 relative" ref={popupRef}>
+            {/*
             <button className="relative p-2.5 text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">
               <Bell size={20} />
               <span className="absolute top-2 right-2 w-2 h-2 bg-rose-500 rounded-full border border-white"></span>
             </button>
+            */}
 
             <button onClick={() => setIsProfilePopupOpen(!isProfilePopupOpen)} className="flex items-center gap-3 pl-4 border-l border-slate-200 hover:opacity-80 transition-opacity">
-              <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-600 border border-blue-200 flex items-center justify-center font-bold text-xs shrink-0">{currentUser.avatar || 'U'}</div>
+              
+              {/* KEYWORD_PROFILE_REFI: Tampilan Avatar Bulat di Header Kanan Atas */}
+              <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-600 border border-blue-200 flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden">
+                {currentUser.avatar_url ? (
+                  <img src={currentUser.avatar_url} alt="Profile" className="w-full h-full object-cover" />
+                ) : (
+                  currentUser.avatar || 'U'
+                )}
+              </div>
+              
               <div className="text-left hidden lg:block">
                 <p className="text-sm font-bold text-slate-800 leading-tight truncate max-w-[150px]">{currentUser.name}</p>
                 <p className="text-[10px] text-slate-500 font-medium">{currentUser.role || 'No Role'}</p>
@@ -1678,7 +1830,19 @@ export default function ClientAdmin() {
                   <p className="text-sm font-bold text-slate-800 truncate">{currentUser.name}</p>
                   <p className="text-xs text-slate-500">{appConfig.name}</p>
                 </div>
-                <button className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 flex items-center gap-3"><UserCircle size={18} className="text-slate-400"/> Profil Saya</button>
+                
+                {/* KEYWORD_PROFILE_REFI: Action klik pada menu Profil Saya untuk memanggil form */}
+                <button 
+                  onClick={() => {
+                    setIsProfilePopupOpen(false);
+                    const session = JSON.parse(localStorage.getItem('vest_user_session') || '{}');
+                    setProfileForm({ password: '', file: null, avatar_url: session.avatar_url || '', avatar_path: session.avatar_path || '' });
+                    setIsProfileModalOpen(true);
+                  }} 
+                  className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 flex items-center gap-3">
+                  <UserCircle size={18} className="text-slate-400"/> Profil Saya
+                </button>
+                
                 <button onClick={handleLogout} className="w-full text-left px-4 py-2.5 text-sm font-medium text-rose-600 hover:bg-rose-50 flex items-center gap-3 mt-1"><LogOut size={18} className="text-rose-400"/> Keluar Sistem</button>
               </div>
             )}
@@ -1694,10 +1858,12 @@ export default function ClientAdmin() {
                 <h1 className="font-bold text-lg leading-tight">{appConfig.name}</h1>
               </div>
             </div>
+            {/*
             <button className="relative p-2 bg-white/20 rounded-full backdrop-blur-sm">
               <Bell size={20} className="text-white" />
               <span className="absolute top-1.5 right-2 w-2 h-2 bg-rose-500 rounded-full border border-blue-600"></span>
             </button>
+            */}
           </div>
         </header>
 
@@ -1720,7 +1886,10 @@ export default function ClientAdmin() {
                       {/* Mengambil daftar cabang otomatis dari data pegawai yang ada */}
                       {[...new Set(employees.map(e => e.lokasi_penempatan).filter(Boolean))].map(loc => <option key={loc} value={loc}>{loc}</option>)}
                     </select>
-                    <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs font-black text-blue-700 flex items-center gap-2 shadow-sm shrink-0"><Clock size={14}/> Hari Ini</span>
+                    <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs font-black text-blue-700 flex items-center gap-2 shadow-sm shrink-0">
+                      <Clock size={14}/> 
+                      {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                    </span>
                   </div>
                 </div>
 
@@ -3738,6 +3907,91 @@ export default function ClientAdmin() {
             </div>
           </div>
         )}
+
+        {/* KEYWORD_PROFILE_REFI: Modal UI Edit Profil (Foto & Password) */}
+        {isProfileModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-[100] flex justify-center items-center p-4">
+            <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 border border-white/20">
+              
+              {/* Header Banner - Modern Gradient */}
+              <div className="relative h-32 bg-gradient-to-r from-blue-600 to-indigo-700 flex justify-between items-start px-6 py-5 shrink-0">
+                <h3 className="font-black text-lg text-white flex items-center gap-2 drop-shadow-md">
+                  <UserCircle size={20} className="text-blue-200"/> Pengaturan Akun
+                </h3>
+                <button type="button" onClick={() => { stopCamera(); setIsProfileModalOpen(false); }} className="p-2 bg-black/20 text-white rounded-full hover:bg-black/40 backdrop-blur-sm transition-all shadow-sm">
+                  <X size={16}/>
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveProfile} className="flex flex-col relative px-6 pb-6 pt-0">
+                
+                {/* Avatar Section - Menimpa Header (Overlapping Style) */}
+                <div className="flex flex-col items-center -mt-16 mb-6 relative z-10">
+                  <div className="w-32 h-32 rounded-full bg-white border-4 border-white shadow-xl flex items-center justify-center overflow-hidden">
+                    {isCameraActive ? (
+                      <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover transform -scale-x-100"></video>
+                    ) : profileForm.file ? (
+                      <img src={URL.createObjectURL(profileForm.file)} alt="Preview" className="w-full h-full object-cover" />
+                    ) : profileForm.avatar_url ? (
+                      <img src={profileForm.avatar_url} alt="Current" className="w-full h-full object-cover" />
+                    ) : (
+                      <UserCircle size={60} className="text-slate-300" />
+                    )}
+                  </div>
+
+                  {/* Tombol Kontrol Kamera & Galeri Modern (Pill Style) */}
+                  <div className="mt-5 w-full">
+                    {isCameraActive ? (
+                      <div className="flex gap-3 justify-center animate-in slide-in-from-bottom-2 fade-in">
+                        <button type="button" onClick={capturePhoto} className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-full text-sm font-bold shadow-lg shadow-emerald-500/30 transition-all flex items-center gap-2">
+                          <Camera size={16}/> Jepret Foto
+                        </button>
+                        <button type="button" onClick={stopCamera} className="px-6 py-2.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-full text-sm font-bold transition-all">
+                          Batal
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex justify-center">
+                        <div className="inline-flex bg-slate-50 p-1.5 rounded-full border border-slate-100 shadow-sm">
+                          <button type="button" onClick={startCamera} className="px-5 py-2 hover:bg-white text-slate-600 hover:text-blue-600 hover:shadow-sm rounded-full text-xs font-bold transition-all flex items-center gap-2">
+                            <Camera size={14}/> Live Kamera
+                          </button>
+                          <label className="px-5 py-2 hover:bg-white text-slate-600 hover:text-blue-600 hover:shadow-sm rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-2">
+                            <Upload size={14}/> Pilih Galeri
+                            <input type="file" accept="image/*" onChange={e => { stopCamera(); setProfileForm({...profileForm, file: e.target.files[0]}); }} className="hidden" />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Password Section - Soft Card Design */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2 mb-8 shadow-inner">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <Key size={12} className="text-slate-400"/> Keamanan Akun
+                  </label>
+                  <input type="password" placeholder="Ketik password baru jika ingin diubah..." value={profileForm.password} onChange={e => setProfileForm({...profileForm, password: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 text-sm outline-none font-bold text-slate-700 transition-all placeholder:font-medium placeholder:text-slate-400"/>
+                  <p className="text-[10px] text-slate-400 font-medium leading-relaxed pt-1">
+                    Biarkan kolom di atas kosong jika Anda tidak berencana mengganti kata sandi.
+                  </p>
+                </div>
+
+                {/* Footer Buttons */}
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => { stopCamera(); setIsProfileModalOpen(false); }} className="flex-1 py-3.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">
+                    Kembali
+                  </button>
+                  <button type="submit" disabled={isUpdatingProfile} className="flex-[2] py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/30 disabled:opacity-50 transition-all flex items-center justify-center gap-2">
+                    {isUpdatingProfile ? <RefreshCw size={18} className="animate-spin"/> : <Check size={18}/>} 
+                    {isUpdatingProfile ? 'Memproses...' : 'Simpan Perubahan'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
       </main>
 
       {/* MOBILE BOTTOM NAVIGATION (PROTECTED) */}

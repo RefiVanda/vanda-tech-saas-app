@@ -146,14 +146,24 @@ export default function MobileApp() {
 
   const fetchUserData = async (userId, parsedSession) => {
     try {
+      // Tambahkan clients(status) di dalam select
       const { data, error } = await supabase.from('employees')
-        .select('client_id, nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti, lokasi_penempatan')
-        .eq('nik_karyawan', parsedSession.nik).single(); // <-- Ganti session.nik jadi parsedSession.nik
+        .select('client_id, nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti, lokasi_penempatan, clients(status)')
+        .eq('nik_karyawan', parsedSession.nik).single(); 
 
       if (error) throw error;
+      
       if (data) {
+        // PROTEKSI SAAS: TENDANG KELUAR JIKA PERUSAHAAN DI-SUSPEND
+        if (data.clients && data.clients.status === 'SUSPENDED') {
+           alert("Akses Perusahaan dibekukan oleh Pusat. Silakan hubungi HRD Anda.");
+           localStorage.removeItem('vest_user_session');
+           navigate('/');
+           return;
+        }
+
         setCurrentUser({
-          id: parsedSession.id, // <-- Ganti session.id jadi parsedSession.id
+          id: parsedSession.id,
           client_id: data.client_id,
           nik: parsedSession.nik,
           name: data.nama_lengkap,
@@ -162,7 +172,7 @@ export default function MobileApp() {
           permissions: data.permissions || {},
           avatar: data.avatar_url,
           avatar_url: data.avatar_url,
-          sisa_cuti: data.sisa_cuti || 0, // <-- Samakan kuncinya dengan UI (sisa_cuti)
+          sisa_cuti: data.sisa_cuti || 0,
           location: data.lokasi_penempatan
         });
       }
