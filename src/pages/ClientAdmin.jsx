@@ -181,6 +181,7 @@ export default function ClientAdmin() {
   const [locationForm, setLocationForm] = useState({ id: null, client_id: '', name: '', latitude: '', longitude: '', radius: 50 });
 
   const [payrolls, setPayrolls] = useState([]);
+
   const [invoices, setInvoices] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [fieldReports, setFieldReports] = useState([]);
@@ -905,10 +906,9 @@ export default function ClientAdmin() {
         const reader = new FileReader();
         reader.onloadend = () => {
            const img = new Image();
-           img.crossOrigin = 'Anonymous'; // Penting agar tidak error CORS
+           img.crossOrigin = 'Anonymous'; 
            img.onload = () => {
              const canvas = document.createElement('canvas');
-             // PERKECIL UKURAN MENJADI 60x60 PIXEL
              const MAX_SIZE = 60;
              const scale = Math.min(MAX_SIZE / img.width, MAX_SIZE / img.height);
              canvas.width = img.width * scale;
@@ -916,11 +916,9 @@ export default function ClientAdmin() {
              
              const ctx = canvas.getContext('2d');
              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-             
-             // Kompres gambar menjadi JPEG dengan kualitas 50%
              resolve(canvas.toDataURL('image/jpeg', 0.5)); 
            };
-           img.onerror = () => resolve(null); // Lewati jika link foto rusak
+           img.onerror = () => resolve(null); 
            img.src = reader.result;
         };
         reader.readAsDataURL(blob);
@@ -930,7 +928,9 @@ export default function ClientAdmin() {
     }
   };
 
+  // ==========================================
   // 1. EXPORT ABSENSI (EXCELJS - WITH REAL IMAGES)
+  // ==========================================
   const exportAbsensiExcel = async () => {
     const filteredData = attendances.filter(a => {
       const matchNama = (a.employees?.nama_lengkap || '').toLowerCase().includes(filterNama.toLowerCase());
@@ -941,14 +941,12 @@ export default function ClientAdmin() {
 
     if (filteredData.length === 0) return alert("Tidak ada data absensi untuk diekspor.");
 
-    // Nyalakan status loading di tombol
     setIsExporting(true);
 
     try {
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('Laporan Absensi');
 
-      // Tentukan struktur dan lebar kolom
       worksheet.columns = [
         { header: 'Tanggal', key: 'date', width: 15 },
         { header: 'Nama Pegawai', key: 'name', width: 25 },
@@ -957,15 +955,13 @@ export default function ClientAdmin() {
         { header: 'Jam Masuk', key: 'in', width: 12 },
         { header: 'Jam Keluar', key: 'out', width: 12 },
         { header: 'Status', key: 'status', width: 15 },
-        { header: 'Foto IN', key: 'photoIn', width: 12 }, // Kolom 8 (Index 7)
-        { header: 'Foto OUT', key: 'photoOut', width: 12 } // Kolom 9 (Index 8)
+        { header: 'Foto IN', key: 'photoIn', width: 12 }, 
+        { header: 'Foto OUT', key: 'photoOut', width: 12 } 
       ];
 
-      // Format Header agar lebih rapi (Tebal & Tengah)
       worksheet.getRow(1).font = { bold: true };
       worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
-      // Mulai memproses setiap baris
       for (let i = 0; i < filteredData.length; i++) {
          const a = filteredData[i];
          const row = worksheet.addRow({
@@ -978,38 +974,26 @@ export default function ClientAdmin() {
            status: a.status
          });
          
-         // Tinggikan baris menjadi 50 agar foto muat
          row.height = 50; 
          row.alignment = { vertical: 'middle' };
          
-         // PROSES FOTO IN
          if (a.photo_url) {
             const base64In = await getCompressedBase64Image(a.photo_url);
             if (base64In) {
                const imageIdIn = workbook.addImage({ base64: base64In, extension: 'jpeg' });
-               worksheet.addImage(imageIdIn, {
-                  tl: { col: 7, row: row.number - 1 }, // Letakkan di kolom H
-                  ext: { width: 45, height: 45 }, // Ukuran fisik di dalam excel
-                  editAs: 'oneCell'
-               });
+               worksheet.addImage(imageIdIn, { tl: { col: 7, row: row.number - 1 }, ext: { width: 45, height: 45 }, editAs: 'oneCell' });
             }
          }
          
-         // PROSES FOTO OUT
          if (a.photo_out_url) {
             const base64Out = await getCompressedBase64Image(a.photo_out_url);
             if (base64Out) {
                const imageIdOut = workbook.addImage({ base64: base64Out, extension: 'jpeg' });
-               worksheet.addImage(imageIdOut, {
-                  tl: { col: 8, row: row.number - 1 }, // Letakkan di kolom I
-                  ext: { width: 45, height: 45 },
-                  editAs: 'oneCell'
-               });
+               worksheet.addImage(imageIdOut, { tl: { col: 8, row: row.number - 1 }, ext: { width: 45, height: 45 }, editAs: 'oneCell' });
             }
          }
       }
 
-      // Generate file Excel dan berikan ke user
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       saveAs(blob, `Laporan_Absen_${filterLokasi || 'Semua_Cabang'}_${new Date().getTime()}.xlsx`);
@@ -1017,9 +1001,204 @@ export default function ClientAdmin() {
     } catch (err) {
       alert("Terjadi kesalahan saat memproses gambar: " + err.message);
     } finally {
-      // Matikan status loading
       setIsExporting(false);
     }
+  };
+
+  // ==========================================
+  // FUNGSI PAYROLL (SMART ENTERPRISE) - EXCEL & MANUAL
+  // ==========================================
+  
+  const [payrollPeriod, setPayrollPeriod] = useState(new Date().toISOString().substring(0, 7)); 
+  const importPayrollRef = useRef(null);
+  const [selectedPayslip, setSelectedPayslip] = useState(null);
+  const [isPayrollModalOpen, setIsPayrollModalOpen] = useState(false);
+  const [payrollForm, setPayrollForm] = useState({ employee_id: '', basic_salary: 0, additions: [], deductions: [] });
+  
+  // TARIF POTONGAN (GLOBAL) - Diatur di halaman depan untuk Excel & Manual
+  const [penaltyRates, setPenaltyRates] = useState({ latePerMinute: 0, absencePerDay: 0 });
+
+  // 1. PENGHITUNG CERDAS (Absensi & Telat)
+  const calculateWorkStats = (employeeId, periodYYYYMM) => {
+    const empAtts = attendances.filter(a => a.employee_id === employeeId && a.date.startsWith(periodYYYYMM) && a.check_in_time);
+    const empShifts = shifts.filter(s => s.employee_id === employeeId && s.date.startsWith(periodYYYYMM) && s.shift_type !== 'Libur');
+
+    let totalHours = 0;
+    let totalLateMinutes = 0;
+
+    empAtts.forEach(a => {
+      const shift = empShifts.find(s => s.date === a.date);
+      if (shift && shift.time_in && a.check_in_time) {
+        const [sH, sM] = shift.time_in.split(':').map(Number);
+        const [aH, aM] = a.check_in_time.split(':').map(Number);
+        let lateMins = ((aH * 60) + aM) - ((sH * 60) + sM);
+        if (lateMins > 10) totalLateMinutes += lateMins; 
+      }
+      if (a.check_in_time && a.check_out_time) {
+        const [inH, inM] = a.check_in_time.split(':').map(Number);
+        const [outH, outM] = a.check_out_time.split(':').map(Number);
+        let daily = (outH + outM / 60) - (inH + inM / 60);
+        if (daily > 4) daily -= 1; 
+        if (daily > 0) totalHours += daily;
+      }
+    });
+
+    const targetHariKerja = empShifts.length > 0 ? empShifts.length : 22; 
+    const totalMangkir = Math.max(0, targetHariKerja - empAtts.length);
+    return { totalDays: empAtts.length, totalHours: Math.round(totalHours), totalLateMinutes, totalMangkir, targetHariKerja };
+  };
+
+  const calculatePPh21 = (brutoBulanan) => {
+    if (!brutoBulanan || brutoBulanan <= 5400000) return 0;
+    let tarif = 0;
+    if (brutoBulanan > 5400000 && brutoBulanan <= 10000000) tarif = 0.02;
+    else if (brutoBulanan > 10000000 && brutoBulanan <= 15000000) tarif = 0.04;
+    else if (brutoBulanan > 15000000 && brutoBulanan <= 20000000) tarif = 0.06;
+    else tarif = 0.09;
+    return Math.round(brutoBulanan * tarif);
+  };
+
+  // 2. EXPORT TEMPLATE EXCEL CERDAS
+  const downloadTemplatePayroll = () => {
+    const activeEmps = employees.filter(e => e.status_pegawai !== 'NONAKTIF');
+    const templateData = activeEmps.map(emp => {
+      const stats = calculateWorkStats(emp.id, payrollPeriod);
+      const pd = typeof emp.personal_data === 'string' ? JSON.parse(emp.personal_data || '{}') : (emp.personal_data || {});
+      const gapok = Number(pd.gaji_terakhir?.replace(/[^0-9]/g, '')) || 0; 
+      
+      let row = { "NIK": emp.nik_karyawan, "Nama_Pegawai": emp.nama_lengkap, "Gaji_Pokok": gapok };
+
+      if (stats.totalLateMinutes > 0 && penaltyRates.latePerMinute > 0) {
+        row[`[-] Denda Telat (${stats.totalLateMinutes} Mnt)`] = stats.totalLateMinutes * penaltyRates.latePerMinute;
+      }
+      if (stats.totalMangkir > 0 && penaltyRates.absencePerDay > 0) {
+        row[`[-] Potongan Mangkir (${stats.totalMangkir} Hari)`] = stats.totalMangkir * penaltyRates.absencePerDay;
+      }
+      return row;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template_Payroll");
+    alert("Template berhasil dibuat!\n\nJika ada Tarif Potongan yang Anda set, sistem telah otomatis menghitung dan memasukkannya ke Excel.");
+    XLSX.writeFile(wb, `Payroll_${payrollPeriod}.xlsx`);
+  };
+
+  // 3. IMPORT EXCEL MASSAL
+  const handleImportPayroll = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const bstr = event.target.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(ws);
+
+      if (!window.confirm(`Proses & Hitung Payroll massal untuk ${data.length} karyawan?`)) return;
+
+      let successData = [];
+      for (const row of data) {
+        const nik = String(row["NIK"]).trim();
+        const employee = employees.find(emp => emp.nik_karyawan === nik);
+        
+        if (employee) {
+          const stats = calculateWorkStats(employee.id, payrollPeriod);
+          let basicSalary = Number(row["Gaji_Pokok"]) || 0;
+          let additions = [];
+          let deductions = [];
+          let totalAdditions = 0;
+          let totalDeductions = 0;
+
+          Object.keys(row).forEach(key => {
+            const value = Number(row[key]) || 0;
+            if (key.startsWith('[+]')) {
+              additions.push({ name: key.replace('[+]', '').trim(), amount: value });
+              totalAdditions += value;
+            } else if (key.startsWith('[-]')) {
+              deductions.push({ name: key.replace('[-]', '').trim(), amount: value });
+              totalDeductions += value;
+            }
+          });
+
+          const grossSalary = basicSalary + totalAdditions;
+          const pph21 = calculatePPh21(grossSalary);
+          const netSalary = grossSalary - totalDeductions - pph21;
+
+          successData.push({
+            client_id: currentUser.client_id, employee_id: employee.id, 
+            period: payrollPeriod, period_month: payrollPeriod,
+            basic_salary: basicSalary, total_work_days: stats.totalDays, total_work_hours: stats.totalHours,
+            additions: additions, deductions: deductions,
+            gross_salary: grossSalary, tax_pph21: pph21, net_salary: netSalary, status: 'LUNAS'
+          });
+        }
+      }
+
+      if (successData.length > 0) {
+        await supabase.from('payrolls').delete().eq('client_id', currentUser.client_id).eq('period', payrollPeriod);
+        const { error } = await supabase.from('payrolls').insert(successData);
+        if (!error) { alert(`Selesai! ${successData.length} data Gaji berhasil diproses.`); fetchAllData(); } 
+        else alert("Database Error: " + error.message);
+      }
+      if(importPayrollRef.current) importPayrollRef.current.value = '';
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  // 4. MANUAL INPUT (SINGLE)
+  const handleSelectEmployeeForPayroll = (empId) => {
+    const employee = employees.find(e => e.id === empId);
+    if (!employee) return setPayrollForm({ employee_id: '', basic_salary: 0, additions: [], deductions: [] });
+
+    const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {});
+    const gapok = Number(pd.gaji_terakhir?.replace(/[^0-9]/g, '')) || 0; 
+    const stats = calculateWorkStats(employee.id, payrollPeriod);
+    let autoAdditions = [], autoDeductions = [];
+
+    if (stats.totalLateMinutes > 0 && penaltyRates.latePerMinute > 0) {
+      autoDeductions.push({ name: `Denda Telat (${stats.totalLateMinutes} Mnt)`, amount: stats.totalLateMinutes * penaltyRates.latePerMinute });
+    }
+    if (stats.totalMangkir > 0 && penaltyRates.absencePerDay > 0) {
+      autoDeductions.push({ name: `Potongan Mangkir (${stats.totalMangkir} Hari)`, amount: stats.totalMangkir * penaltyRates.absencePerDay });
+    }
+    setPayrollForm({ employee_id: empId, basic_salary: gapok, additions: autoAdditions, deductions: autoDeductions });
+  };
+
+  const handleAddPayrollComponent = (type) => setPayrollForm(prev => ({ ...prev, [type]: [...prev[type], { name: '', amount: 0 }] }));
+  const handleRemovePayrollComponent = (type, index) => setPayrollForm(prev => ({ ...prev, [type]: prev[type].filter((_, i) => i !== index) }));
+  const handleUpdatePayrollComponent = (type, index, field, value) => {
+    const updated = [...payrollForm[type]];
+    updated[index][field] = value;
+    setPayrollForm(prev => ({ ...prev, [type]: updated }));
+  };
+
+  const handleSaveManualPayroll = async (e) => {
+    e.preventDefault();
+    if (!payrollForm.employee_id) return alert("Pilih karyawan!");
+    const employee = employees.find(emp => emp.id === payrollForm.employee_id);
+    const stats = calculateWorkStats(employee.id, payrollPeriod);
+
+    const totalAdditions = payrollForm.additions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const totalDeductions = payrollForm.deductions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const basicSalary = Number(payrollForm.basic_salary || 0);
+    const grossSalary = basicSalary + totalAdditions;
+    const pph21 = calculatePPh21(grossSalary);
+    const netSalary = grossSalary - totalDeductions - pph21;
+
+    const payload = {
+      client_id: currentUser.client_id, employee_id: employee.id, 
+      period: payrollPeriod, period_month: payrollPeriod,
+      basic_salary: basicSalary, total_work_days: stats.totalDays, total_work_hours: stats.totalHours,
+      additions: payrollForm.additions.filter(a => a.name.trim() !== ''), 
+      deductions: payrollForm.deductions.filter(d => d.name.trim() !== ''),
+      gross_salary: grossSalary, tax_pph21: pph21, net_salary: netSalary, status: 'LUNAS'
+    };
+
+    await supabase.from('payrolls').delete().eq('employee_id', employee.id).eq('period', payrollPeriod);
+    const { error } = await supabase.from('payrolls').insert([payload]);
+    if (!error) { alert("Berhasil!"); setIsPayrollModalOpen(false); fetchAllData(); } else alert("Error: " + error.message);
   };
 
   // ==========================================
@@ -2538,9 +2717,113 @@ export default function ClientAdmin() {
                     </div>
                   </div>
                 )}
-                {financeTab !== 'overview' && (
-                  <div className="bg-white p-8 rounded-2xl border border-slate-100 text-center text-slate-400 font-bold">
-                    Modul detail {financeTab} sedang disiapkan.
+                {/* KEYWORD_PAYROLL_REFI: Modul UI Penggajian (Payroll) */}
+                {financeTab === 'payroll' && (
+                  <div className="space-y-6 fade-in">
+                    
+                    {/* SETTING TARIF DENDA GLOBAL (UNTUK EXCEL & MANUAL) */}
+                    <div className="bg-rose-50/50 border border-rose-100 p-4 rounded-2xl shadow-sm">
+                      <p className="text-[10px] font-black text-rose-800 uppercase tracking-widest mb-3 flex items-center gap-2"><Clock size={14}/> Pengaturan Tarif Potongan Kehadiran (Opsional)</p>
+                      <div className="flex flex-col md:flex-row gap-4">
+                        <div className="flex-1">
+                          <label className="block text-[10px] font-bold text-rose-600 mb-1">Potongan Telat per Menit (Rp)</label>
+                          <input type="number" placeholder="Cth: 1000" value={penaltyRates.latePerMinute || ''} onChange={e => setPenaltyRates(p => ({...p, latePerMinute: Number(e.target.value)}))} className="w-full px-3 py-2 border border-rose-200 rounded-lg focus:border-rose-400 text-xs font-bold bg-white text-rose-900"/>
+                        </div>
+                        <div className="flex-1">
+                          <label className="block text-[10px] font-bold text-rose-600 mb-1">Potongan Mangkir per Hari (Rp)</label>
+                          <input type="number" placeholder="Cth: 100000" value={penaltyRates.absencePerDay || ''} onChange={e => setPenaltyRates(p => ({...p, absencePerDay: Number(e.target.value)}))} className="w-full px-3 py-2 border border-rose-200 rounded-lg focus:border-rose-400 text-xs font-bold bg-white text-rose-900"/>
+                        </div>
+                        <div className="flex-1 flex items-end">
+                           <p className="text-[9px] text-rose-500 italic pb-2">*Tarif ini akan otomatis dimasukkan saat Anda mengunduh Template Excel maupun Input Manual.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Header Kontrol Payroll */}
+                    <div className="bg-white p-4 border border-slate-200 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+                      <div className="flex items-center gap-3 w-full md:w-auto">
+                        <span className="text-sm font-bold text-slate-500">Periode Gaji:</span>
+                        <input type="month" value={payrollPeriod} onChange={e => setPayrollPeriod(e.target.value)} className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-emerald-700 outline-none focus:border-emerald-500 flex-1 md:flex-none" />
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 w-full md:w-auto">
+                        {hasPermission('finance', 'export') && (
+                          <button onClick={downloadTemplatePayroll} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2 flex-1 md:flex-none justify-center">
+                             Unduh Template Excel
+                          </button>
+                        )}
+                        {hasPermission('finance', 'create') && (
+                          <>
+                            <input type="file" accept=".xlsx, .xls" ref={importPayrollRef} onChange={handleImportPayroll} className="hidden" />
+                            <button onClick={() => importPayrollRef.current.click()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 flex-1 md:flex-none justify-center">
+                               <RefreshCw size={14}/> Import Data Excel
+                            </button>
+                            <button onClick={() => {
+                              setPayrollForm({ employee_id: '', basic_salary: 0, additions: [], deductions: [] });
+                              setIsPayrollModalOpen(true);
+                            }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 flex-1 md:flex-none justify-center">
+                              <Plus size={14}/> Buat Manual
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Tabel Data Gaji Bulan Terpilih */}
+                    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                          <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                            <tr>
+                              <th className="px-6 py-4">Karyawan & Integrasi HRIS</th>
+                              <th className="px-6 py-4">Pendapatan Bruto</th>
+                              <th className="px-6 py-4">PPh 21 & Potongan</th>
+                              <th className="px-6 py-4">Gaji Bersih (Netto)</th>
+                              <th className="px-6 py-4 text-center">Status / Aksi</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-sm">
+                            {payrolls.filter(p => p.period === payrollPeriod).map(pay => {
+                              const emp = employees.find(e => e.id === pay.employee_id);
+                              return (
+                              <tr key={pay.id} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-6 py-4">
+                                  <span className="font-bold text-slate-800 block">{emp?.nama_lengkap || 'Unknown'}</span>
+                                  <span className="text-[10px] font-semibold text-slate-500 block">NIK: {emp?.nik_karyawan}</span>
+                                  <div className="flex gap-2 mt-1">
+                                    <span className="text-[9px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-black border border-blue-100">{pay.total_work_days} Hari Masuk</span>
+                                    <span className="text-[9px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-black border border-blue-100">{pay.total_work_hours} Jam Kerja</span>
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className="font-bold text-slate-700">{formatRupiah(pay.gross_salary)}</span>
+                                  <span className="block text-[10px] text-slate-500 mt-1">(Gaji Pokok + {pay.additions?.length || 0} Komponen)</span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className="font-bold text-rose-600 block flex items-center gap-1">
+                                    Pajak: {formatRupiah(pay.tax_pph21)}
+                                  </span>
+                                  <span className="block text-[10px] text-slate-500 mt-1">Lainnya: {formatRupiah(pay.deductions?.reduce((sum, item) => sum + item.amount, 0))}</span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className="font-black text-emerald-600 text-base bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-100">
+                                    {formatRupiah(pay.net_salary)}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 text-center">
+                                  <button onClick={() => setSelectedPayslip({ ...pay, employee: emp })} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 mx-auto">
+                                    <FileText size={14}/> Payslip
+                                  </button>
+                                </td>
+                              </tr>
+                            )})}
+                            {payrolls.filter(p => p.period === payrollPeriod).length === 0 && (
+                              <tr><td colSpan="5" className="text-center py-10 text-slate-400 font-bold bg-slate-50/50">Belum ada perhitungan gaji untuk periode ini.<br/><span className="text-xs font-normal">Silakan Unduh Template lalu Import Data untuk menghitung.</span></td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -3985,6 +4268,95 @@ export default function ClientAdmin() {
                   <button type="submit" disabled={isUpdatingProfile} className="flex-[2] py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/30 disabled:opacity-50 transition-all flex items-center justify-center gap-2">
                     {isUpdatingProfile ? <RefreshCw size={18} className="animate-spin"/> : <Check size={18}/>} 
                     {isUpdatingProfile ? 'Memproses...' : 'Simpan Perubahan'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* KEYWORD_PAYROLL_MANUAL: Modal Form Input Payroll Manual */}
+        {isPayrollModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-center items-center p-4">
+            <div className="bg-slate-50 w-full max-w-3xl max-h-[90vh] rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300 border border-slate-200">
+              
+              <div className="px-6 py-5 border-b border-slate-200 flex justify-between items-center bg-white shrink-0">
+                <div>
+                  <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><Wallet size={20} className="text-blue-600"/> Input Payroll Manual</h3>
+                  <p className="text-xs font-bold text-slate-500 mt-1">Periode: <span className="text-blue-600">{payrollPeriod}</span></p>
+                </div>
+                <button type="button" onClick={() => setIsPayrollModalOpen(false)} className="p-2 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200"><X size={16}/></button>
+              </div>
+
+              <form onSubmit={handleSaveManualPayroll} className="flex flex-col flex-1 overflow-hidden">
+                <div className="p-6 md:p-8 overflow-y-auto bg-white flex-1 custom-scrollbar space-y-6">
+                  
+                  {/* Pilihan Pegawai & Gaji Pokok */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Pilih Karyawan</label>
+                      <select required value={payrollForm.employee_id} onChange={e => handleSelectEmployeeForPayroll(e.target.value)} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all">
+                         <option value="">-- Silakan Pilih Pegawai --</option>
+                         {employees.filter(e => e.status_pegawai !== 'NONAKTIF').map(emp => (
+                           <option key={emp.id} value={emp.id}>{emp.nama_lengkap} ({emp.nik_karyawan})</option>
+                         ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Gaji Pokok (Basic Salary)</label>
+                      <input required type="number" placeholder="Cth: 5000000" value={payrollForm.basic_salary} onChange={e => setPayrollForm({...payrollForm, basic_salary: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-100">
+                    
+                    {/* BAGIAN PENAMBAHAN (TUNJANGAN) */}
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                        <h4 className="text-xs font-black text-emerald-800 uppercase tracking-widest">Penambahan [+]</h4>
+                        <button type="button" onClick={() => handleAddPayrollComponent('additions')} className="text-[10px] bg-emerald-600 text-white px-2 py-1 rounded font-bold hover:bg-emerald-700 flex items-center gap-1"><Plus size={12}/> Tambah</button>
+                      </div>
+                      
+                      {payrollForm.additions.map((item, index) => (
+                        <div key={index} className="flex gap-2 items-center animate-in fade-in">
+                          <input type="text" placeholder="Nama Komponen" value={item.name} onChange={e => handleUpdatePayrollComponent('additions', index, 'name', e.target.value)} className="w-1/2 px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-emerald-500"/>
+                          <input type="number" placeholder="Nominal" value={item.amount} onChange={e => handleUpdatePayrollComponent('additions', index, 'amount', e.target.value)} className="w-1/2 px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-emerald-500"/>
+                          <button type="button" onClick={() => handleRemovePayrollComponent('additions', index)} className="p-2 bg-rose-50 text-rose-500 rounded-lg hover:bg-rose-100"><X size={14}/></button>
+                        </div>
+                      ))}
+                      {payrollForm.additions.length === 0 && <p className="text-[10px] text-slate-400 italic text-center">Tidak ada komponen penambahan.</p>}
+                    </div>
+
+                    {/* BAGIAN PENGURANGAN (POTONGAN) */}
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center bg-rose-50 p-3 rounded-xl border border-rose-100">
+                        <h4 className="text-xs font-black text-rose-800 uppercase tracking-widest">Potongan [-]</h4>
+                        <button type="button" onClick={() => handleAddPayrollComponent('deductions')} className="text-[10px] bg-rose-600 text-white px-2 py-1 rounded font-bold hover:bg-rose-700 flex items-center gap-1"><Plus size={12}/> Tambah</button>
+                      </div>
+                      
+                      {payrollForm.deductions.map((item, index) => (
+                        <div key={index} className="flex gap-2 items-center animate-in fade-in">
+                          <input type="text" placeholder="Nama Komponen" value={item.name} onChange={e => handleUpdatePayrollComponent('deductions', index, 'name', e.target.value)} className="w-1/2 px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-rose-500"/>
+                          <input type="number" placeholder="Nominal" value={item.amount} onChange={e => handleUpdatePayrollComponent('deductions', index, 'amount', e.target.value)} className="w-1/2 px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-rose-500"/>
+                          <button type="button" onClick={() => handleRemovePayrollComponent('deductions', index)} className="p-2 bg-rose-50 text-rose-500 rounded-lg hover:bg-rose-100"><X size={14}/></button>
+                        </div>
+                      ))}
+                      {payrollForm.deductions.length === 0 && <p className="text-[10px] text-slate-400 italic text-center">Tidak ada komponen potongan.</p>}
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mt-6">
+                    <p className="text-[10px] font-bold text-amber-800 italic">
+                      *Catatan: Sistem akan secara otomatis menghitung Pajak PPh 21, Total Kehadiran, dan Jam Kerja aktual dari HRIS saat tombol "Proses & Simpan" ditekan.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Footer Buttons */}
+                <div className="p-5 border-t border-slate-200 bg-slate-50 flex justify-end gap-3 shrink-0">
+                  <button type="button" onClick={() => setIsPayrollModalOpen(false)} className="px-5 py-3 text-slate-600 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Batal</button>
+                  <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 flex items-center gap-2">
+                    <Check size={16}/> Proses & Simpan Gaji
                   </button>
                 </div>
               </form>
