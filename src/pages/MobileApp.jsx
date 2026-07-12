@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
 import { 
-  Home, MapPin, Camera, FileText, User, 
+  Home, MapPin, Camera, FileText, User, Download,
   Clock, ShieldAlert, CreditCard, 
   Calendar, Settings, Lock, Image as ImageIcon, Bell, ArrowRight,
   CheckCircle2, LogOut, LogIn, History, Check, ChevronLeft, ChevronRight, Upload, X, RefreshCw, Plus,
@@ -10,8 +10,45 @@ import {
 } from 'lucide-react';
 
 export default function MobileApp() {
+
+  // FUNGSI PDF UNTUK MOBILE APP
+  const handleDownloadPDFMobile = (elementId, fileName) => {
+    const element = document.getElementById(elementId);
+    if (!element) return alert("Elemen dokumen tidak ditemukan!");
+    
+    const generate = () => {
+      const opt = {
+        margin:       [5, 5, 5, 5],
+        filename:     fileName,
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2, useCORS: true },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
+      window.html2pdf().set(opt).from(element).save().catch(err => alert("Gagal membuat PDF: " + err.message));
+    };
+
+    if (typeof window.html2pdf === 'undefined') {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+      script.onload = generate;
+      script.onerror = () => alert("Gagal memuat library PDF. Pastikan internet stabil.");
+      document.head.appendChild(script);
+    } else {
+      generate();
+    }
+  };
+
   const navigate = useNavigate();
+  // KONFIGURASI NAMA PERUSAHAAN
+  const appConfig = {
+    name: "PT Klien Nusantara",
+    short: "KN",
+    color: "bg-blue-600",
+    text: "text-blue-600",
+    light: "bg-blue-50"
+  };
   const [activeMenu, setActiveMenu] = useState('home');
+  
   // FUNGSI CEK HAK AKSES MENU MOBILE (SMART DETECTOR)
   const hasMobileMenu = (menuName) => {
     // 1. Prioritas Utama: Cek Override (Perorangan)
@@ -102,6 +139,19 @@ export default function MobileApp() {
 
   const [absenInPhotoDb, setAbsenInPhotoDb] = useState(null);
   const [absenOutPhotoDb, setAbsenOutPhotoDb] = useState(null);
+
+  const [selectedPayslip, setSelectedPayslip] = useState(null);
+  const [payrolls, setPayrolls] = useState([]);
+  
+  // --- TAMBAHAN PERBAIKAN: Fungsi Format Rupiah ---
+  const formatRupiah = (number) => {
+    if (number === undefined || number === null) return "Rp 0";
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0
+    }).format(number);
+  };
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -175,6 +225,12 @@ export default function MobileApp() {
           sisa_cuti: data.sisa_cuti || 0,
           location: data.lokasi_penempatan
         });
+        
+        // --- TAMBAHAN PERBAIKAN: Update State Permissions ---
+        if (data.permissions) {
+          setPermissions(data.permissions);
+        }
+        
       }
     } catch (err) {
       console.error("Gagal menarik data profil:", err);
@@ -200,6 +256,10 @@ export default function MobileApp() {
     // --- FETCH RIWAYAT REIMBURSEMENT ---
     const { data: rmData } = await supabase.from('reimbursements').select('*').eq('employee_id', userId).order('created_at', { ascending: false }).limit(20);
     if (rmData) setReimburseHistory(rmData);
+
+    // FETCH RIWAYAT GAJI
+    const { data: payData } = await supabase.from('payrolls').select('*').eq('employee_id', userId).order('created_at', { ascending: false });
+    if (payData) setPayrolls(payData);
 
     // FETCH INSTRUKSI (Penyaringan Multi-Level)
     const { data: userDb } = await supabase.from('employees').select('lokasi_penempatan').eq('id', userId).single();
@@ -925,9 +985,9 @@ export default function MobileApp() {
                     </button>
                   )}
 
-                  {/* Tombol Tambahan: Slip Gaji (Akan muncul jika dicentang di Admin) */}
+                  {/* Tombol Tambahan: Slip Gaji */}
                   {hasMobileMenu('slip') && (
-                    <button onClick={() => alert('Fitur Slip Gaji sedang dalam pengembangan')} className="flex flex-col items-center gap-2 active:scale-95">
+                    <button onClick={() => setActiveMenu('slip')} className="flex flex-col items-center gap-2 active:scale-95">
                       <div className="w-14 h-14 bg-gradient-to-br from-rose-50 to-rose-100/80 rounded-2xl flex items-center justify-center shadow-sm"><CreditCard size={24} className="text-rose-600"/></div>
                       <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Slip Gaji</span>
                     </button>
@@ -1597,7 +1657,7 @@ export default function MobileApp() {
                                               <img src={p.url} alt="reguler" className="w-16 h-16 object-cover rounded-lg border border-slate-200 shadow-sm shrink-0" />
                                               <div className="flex-1 min-w-0">
                                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Lampiran {i+1}</p>
-                                                <p className="text-[11px] text-slate-700 font-medium break-words leading-snug">{p.desc || <span className="italic text-slate-400">Tidak ada keterangan gambar.</span>}</p>
+                                                <p className="text-[11px] text-slate-700 font-medium break-words leading-snug">{p.desc ? p.desc : <span className="italic text-slate-400">Tidak ada keterangan gambar.</span>}</p>
                                               </div>
                                             </div>
                                           ))}
@@ -1614,9 +1674,9 @@ export default function MobileApp() {
                     </div>
                   ) : (
                     <div className="bg-white p-5 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 animate-in slide-in-from-bottom-4 duration-300">
-                      <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+                      <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-2">
                         <h3 className="font-bold text-slate-800 text-sm">Form Laporan Reguler</h3>
-                        <button onClick={() => setIsRegulerFormOpen(false)} className="text-slate-400 hover:text-rose-500 bg-slate-50 p-1.5 rounded-full active:scale-95"><X size={16}/></button>
+                        <button onClick={() => setIsRegulerFormOpen(false)} className="text-slate-400 hover:text-rose-500 p-1.5 bg-slate-50 rounded-lg active:scale-95"><X size={16}/></button>
                       </div>
 
                       <div className="space-y-3 mb-4">
@@ -1639,20 +1699,20 @@ export default function MobileApp() {
                       </div>
 
                       <button onClick={() => startPatrolCamera('environment')} className="flex flex-col items-center justify-center w-full py-4 border-2 border-dashed border-blue-200 bg-blue-50/50 rounded-2xl text-[#0a195c] font-bold text-xs cursor-pointer hover:bg-blue-50 transition-colors mb-6 active:scale-95">
-                        <Camera size={20} className="mb-1"/> {regulerPhotos.length > 0 ? 'Tambah Foto Laporan (Kamera)' : 'Ambil Foto Laporan (Kamera)'}
+                        <Camera size={20} className="mb-1"/> {regulerPhotos.length > 0 ? 'Tambah Foto (Kamera)' : 'Ambil Foto Laporan (Kamera)'}
                       </button>
 
                       <div className="mb-4">
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Keterangan Laporan</label>
                         <textarea 
-                          placeholder="Tuliskan isi laporan secara lengkap di sini..."
+                          placeholder="Tuliskan keterangan laporan reguler di sini..."
                           value={regulerDesc}
                           onChange={(e) => setRegulerDesc(e.target.value)}
                           className="w-full h-24 p-3.5 text-xs border border-slate-200 rounded-2xl outline-none focus:border-[#0a195c] focus:ring-4 focus:ring-[#0a195c]/10 resize-none bg-slate-50 focus:bg-white font-medium custom-scrollbar transition-all"
                         />
                       </div>
 
-                      <button onClick={handleRegulerSubmit} disabled={isSubmittingReport} className="w-full bg-emerald-500 text-white py-3.5 rounded-2xl font-bold text-sm shadow-[0_8px_20px_rgba(16,185,129,0.3)] active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                      <button onClick={handleRegulerSubmit} disabled={isSubmittingReport} className="w-full bg-[#0a195c] text-white py-3.5 rounded-2xl font-bold text-sm shadow-lg active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                         {isSubmittingReport ? <RefreshCw size={18} className="animate-spin"/> : <CheckCircle2 size={18}/>}
                         {isSubmittingReport ? 'Mengunggah Data...' : 'Kirim Laporan Reguler'}
                       </button>
@@ -1665,61 +1725,197 @@ export default function MobileApp() {
         </div>
 
         {/* ========================================== */}
-        {/* === VIEW KAMERA PATROLI (FULL SCREEN) ==== */}
-        {/* ========================================== */}
-        <div className={`absolute inset-0 bg-[#0f172a] flex flex-col z-[60] transition-transform duration-300 ${isPatrolCameraOpen ? 'translate-y-0' : 'translate-y-full'}`}>
-          <div className="pt-10 pb-4 px-6 flex justify-between items-center text-white shrink-0">
-            <button onClick={stopPatrolCamera} className="p-2 bg-white/10 rounded-full active:scale-95"><X size={24} /></button>
-            <h1 className="font-bold text-lg">Kamera Laporan</h1>
-            <button onClick={() => startPatrolCamera(patrolFacingMode === 'environment' ? 'user' : 'environment')} className="p-2 bg-white/10 rounded-full active:scale-95"><RefreshCw size={24} /></button>
-          </div>
-
-          <div className="flex-1 relative bg-black mx-4 mb-4 rounded-[2rem] overflow-hidden border-2 border-white/10 flex items-center justify-center shadow-2xl">
-            <canvas ref={patrolCanvasRef} className="hidden" />
-            <video ref={patrolVideoRef} autoPlay playsInline className={`w-full h-full object-cover ${patrolFacingMode === 'user' ? 'scale-x-[-1]' : ''}`} />
-
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-56 h-72 border-2 border-dashed border-white/50 rounded-[3rem] opacity-70"></div>
+          {/* === VIEW 5: SLIP GAJI === */}
+          {/* ========================================== */}
+          <div className={`absolute inset-0 bg-[#F4F7FB] flex flex-col transition-transform duration-300 ease-in-out z-30 ${activeMenu === 'slip' ? 'translate-x-0' : 'translate-x-full'}`}>
+            <div className="px-6 pt-12 pb-6 bg-white shadow-sm flex items-center justify-between z-10">
+              <button onClick={() => { setActiveMenu('home'); setSelectedPayslip(null); }} className="p-2 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200 active:scale-95"><ChevronLeft size={20}/></button>
+              <h1 className="text-lg font-bold text-slate-800">Slip Gaji</h1>
+              <div className="w-9"></div>
             </div>
+            <main className="flex-1 overflow-y-auto px-5 py-6 pb-24 space-y-4 custom-scrollbar">
+               {payrolls.length === 0 ? (
+                 <div className="text-center py-10 bg-white rounded-3xl border border-slate-100 border-dashed shadow-sm">
+                   <CreditCard size={32} className="mx-auto text-slate-300 mb-2"/>
+                   <p className="text-[11px] text-slate-400 font-bold">Belum ada data slip gaji.</p>
+                 </div>
+               ) : (
+                 payrolls.map(pay => (
+                   <div key={pay.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col">
+                     <div className="flex justify-between items-center mb-3 pb-3 border-b border-slate-100">
+                       <div>
+                         <h3 className="font-bold text-[#0a195c]">Periode: {pay.period}</h3>
+                         <p className="text-[10px] text-slate-500 font-medium">Status: LUNAS</p>
+                       </div>
+                       <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl"><CreditCard size={20} /></div>
+                     </div>
+                     <div className="mb-4">
+                       <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Total Diterima (THP)</p>
+                       <p className="text-xl font-black text-emerald-600">{formatRupiah(pay.net_salary)}</p>
+                     </div>
+                     <button onClick={() => setSelectedPayslip(pay.id === selectedPayslip ? null : pay.id)} className="w-full py-2.5 bg-blue-50 text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-100 transition-colors">
+                       {selectedPayslip === pay.id ? 'Tutup Rincian' : 'Lihat Rincian Lengkap'}
+                     </button>
+                     
+                     {selectedPayslip === pay.id && (
+                       <div className="mt-4 pt-4 border-t border-dashed border-slate-200 animate-in fade-in zoom-in duration-300">
+                          {/* DESAIN PAYSLIP MIRIP CLIENT ADMIN */}
+                          {/* DESAIN PAYSLIP MIRIP CLIENT ADMIN */}
+                          <div id={`payslip-mobile-${pay.id}`} className="border border-[#cbd5e1] p-4 rounded-xl bg-[#ffffff] text-[#0f172a] relative">
+                             {/* HEADER SURAT */}
+                             <div className="flex justify-between items-start border-b-2 border-[#1e293b] pb-3 mb-4">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-8 h-8 bg-[#1e293b] text-[#ffffff] rounded flex items-center justify-center font-black text-xs">
+                                    {appConfig.short}
+                                  </div>
+                                  <div>
+                                    <h2 className="text-sm font-black text-[#0f172a] uppercase tracking-widest leading-tight">{appConfig.name}</h2>
+                                    <p className="text-[8px] text-[#475569] font-medium">Slip Gaji Karyawan</p>
+                                  </div>
+                                </div>
+                             </div>
+
+                             {/* INFO KARYAWAN */}
+                             <table className="w-full text-[9px] mb-4 border-collapse border border-[#1e293b]">
+                                <tbody>
+                                   <tr>
+                                      <td className="bg-[#f1f5f9] font-bold p-1.5 w-1/3 border border-[#1e293b]">Nama Lengkap</td>
+                                      <td className="p-1.5 border border-[#1e293b] font-bold">{currentUser.name}</td>
+                                   </tr>
+                                   <tr>
+                                      <td className="bg-[#f1f5f9] font-bold p-1.5 border border-[#1e293b]">NIK / Divisi</td>
+                                      <td className="p-1.5 border border-[#1e293b]">{currentUser.nik} / {currentUser.division}</td>
+                                   </tr>
+                                   <tr>
+                                      <td className="bg-[#f1f5f9] font-bold p-1.5 border border-[#1e293b]">Periode Gaji</td>
+                                      <td className="p-1.5 border border-[#1e293b] font-black">{pay.period}</td>
+                                   </tr>
+                                   <tr>
+                                      <td className="bg-[#f1f5f9] font-bold p-1.5 border border-[#1e293b]">Kehadiran</td>
+                                      <td className="p-1.5 border border-[#1e293b]">{pay.total_work_days} Hari Masuk</td>
+                                   </tr>
+                                </tbody>
+                             </table>
+
+                             {/* EARNINGS */}
+                             <table className="w-full text-[9px] mb-3 border-collapse border border-[#1e293b]">
+                                <thead className="bg-[#1e293b] text-[#ffffff]">
+                                   <tr>
+                                      <th className="p-1.5 text-left border-r border-[#334155]">PENGHASILAN</th>
+                                      <th className="p-1.5 text-right">NOMINAL</th>
+                                   </tr>
+                                </thead>
+                                <tbody>
+                                   <tr>
+                                      <td className="p-1.5 border border-[#1e293b] font-semibold">Gaji Pokok</td>
+                                      <td className="p-1.5 border border-[#1e293b] text-right">{formatRupiah(pay.basic_salary)}</td>
+                                   </tr>
+                                   {(pay.additions || []).map((add, i) => (
+                                   <tr key={i}>
+                                      <td className="p-1.5 border border-[#1e293b] font-semibold">{add.name}</td>
+                                      <td className="p-1.5 border border-[#1e293b] text-right">{formatRupiah(add.amount)}</td>
+                                   </tr>
+                                   ))}
+                                   <tr className="bg-[#f1f5f9]">
+                                      <td className="p-1.5 border border-[#1e293b] text-right font-black">Total Kotor</td>
+                                      <td className="p-1.5 border border-[#1e293b] text-right font-black">{formatRupiah(pay.gross_salary)}</td>
+                                   </tr>
+                                </tbody>
+                             </table>
+
+                             {/* DEDUCTIONS */}
+                             <table className="w-full text-[9px] mb-4 border-collapse border border-[#1e293b]">
+                                <thead className="bg-[#1e293b] text-[#ffffff]">
+                                   <tr>
+                                      <th className="p-1.5 text-left border-r border-[#334155]">POTONGAN</th>
+                                      <th className="p-1.5 text-right">NOMINAL</th>
+                                   </tr>
+                                </thead>
+                                <tbody>
+                                   <tr>
+                                      <td className="p-1.5 border border-[#1e293b] font-semibold">PPh 21</td>
+                                      <td className="p-1.5 border border-[#1e293b] text-right">{formatRupiah(pay.tax_pph21)}</td>
+                                   </tr>
+                                   {(pay.deductions || []).map((ded, i) => (
+                                   <tr key={i}>
+                                      <td className="p-1.5 border border-[#1e293b] font-semibold">{ded.name}</td>
+                                      <td className="p-1.5 border border-[#1e293b] text-right">{formatRupiah(ded.amount)}</td>
+                                   </tr>
+                                   ))}
+                                </tbody>
+                             </table>
+
+                             {/* TAKE HOME PAY */}
+                             <table className="w-full border-collapse border border-[#0f172a] mb-4">
+                                <tbody>
+                                   <tr className="bg-[#0f172a] text-[#ffffff] font-black">
+                                      <td className="p-2 text-left text-[10px]">TAKE HOME PAY</td>
+                                      <td className="p-2 text-right text-sm">{formatRupiah(pay.net_salary)}</td>
+                                   </tr>
+                                </tbody>
+                             </table>
+                             
+                             <p className="text-[7px] text-[#64748b] italic text-center">Dokumen ini sah dan diterbitkan otomatis oleh sistem.</p>
+                          </div>
+
+                          {/* PDF DOWNLOAD BUTTON MOBILE */}
+                          <button 
+                             onClick={() => {
+                               const elementId = `payslip-mobile-${pay.id}`;
+                               handleDownloadPDFMobile(elementId, `Payslip_${currentUser.name}_${pay.period}.pdf`);
+                             }} 
+                             className="w-full mt-3 bg-slate-800 hover:bg-slate-900 text-white py-3 rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-2 transition-colors active:scale-95"
+                          >
+                            <Download size={14}/> Download PDF
+                          </button>
+                       </div>
+                     )}
+                   </div>
+                 ))
+               )}
+            </main>
           </div>
 
-          <div className="h-32 pb-8 shrink-0 flex items-center justify-center">
-            <button onClick={capturePatrolPhoto} className="w-20 h-20 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center border-4 border-white active:scale-90 transition-transform">
-              <div className="w-14 h-14 bg-white rounded-full"></div>
+          {/* ========================================== */}
+          {/* === MODAL: KAMERA LAPORAN (PATROLI & REGULER) === */}
+          {/* ========================================== */}
+          {isPatrolCameraOpen && (
+            <div className="absolute inset-0 bg-black z-50 flex flex-col">
+              <div className="px-5 pt-10 pb-4 flex justify-between items-center text-white bg-gradient-to-b from-black/80 to-transparent absolute top-0 w-full z-10">
+                 <button onClick={stopPatrolCamera} className="p-2 bg-white/20 rounded-full active:scale-95"><X size={20}/></button>
+                 <span className="font-bold text-sm">Foto Dokumentasi</span>
+                 <button onClick={() => startPatrolCamera(patrolFacingMode === 'environment' ? 'user' : 'environment')} className="p-2 bg-white/20 rounded-full active:scale-95"><RefreshCw size={20}/></button>
+              </div>
+              <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+                 <video ref={patrolVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" />
+                 <canvas ref={patrolCanvasRef} className="hidden" />
+              </div>
+              <div className="pb-10 pt-6 px-8 flex justify-center bg-gradient-to-t from-black/80 to-transparent absolute bottom-0 w-full z-10">
+                 <button onClick={capturePatrolPhoto} className="w-20 h-20 rounded-full border-4 border-white bg-white/30 active:scale-95 transition-transform shadow-[0_0_20px_rgba(255,255,255,0.3)]"></button>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================== */}
+          {/* === BOTTOM NAVIGATION BAR (FIXED) === */}
+          {/* ========================================== */}
+          <div className="absolute bottom-0 w-full bg-white border-t border-slate-200 flex justify-around items-center py-3 px-2 z-50 rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.03)] pb-5">
+            <button onClick={() => setActiveMenu('home')} className={`flex flex-col items-center p-2 transition-colors ${activeMenu === 'home' ? 'text-[#0a195c]' : 'text-slate-400'}`}>
+              <Home size={24} className={activeMenu === 'home' ? 'drop-shadow-md' : ''}/>
+              <span className="text-[10px] font-bold mt-1">Beranda</span>
             </button>
-          </div>
-        </div>
-
-        {/* ========================================== */}
-        {/* === BOTTOM NAVBAR === */}
-        {/* ========================================== */}
-        <div className="shrink-0 z-30 pb-safe relative" style={{ filter: 'drop-shadow(0px -4px 15px rgba(0,0,0,0.06))' }}>
-          <nav className="bg-white flex justify-between items-center px-2 h-[76px]" style={{ WebkitMaskImage: 'radial-gradient(circle 38px at 50% 0%, transparent 38px, black 39px)', maskImage: 'radial-gradient(circle 38px at 50% 0%, transparent 38px, black 39px)'}}>
-            <div className="flex w-2/5 justify-around pt-3">
-              <button onClick={() => setActiveMenu('home')} className="flex flex-col items-center gap-1 transition-colors">
-                <Home size={22} className={activeMenu === 'home' ? "text-[#0a195c]" : "text-slate-400"} strokeWidth={2.5} />
-                <span className={`text-[10px] font-bold ${activeMenu === 'home' ? "text-[#0a195c]" : "text-slate-400"}`}>Home</span>
+            
+            <div className="relative -top-6">
+              <button onClick={() => setActiveMenu('absen')} className="bg-[#0a195c] text-white p-4 rounded-full shadow-lg shadow-blue-900/30 flex items-center justify-center border-4 border-[#F4F7FB] active:scale-95 transition-transform">
+                <Camera size={28} />
               </button>
             </div>
 
-            <div className="w-1/5"></div>
-                <div className="flex w-2/5 justify-around pt-3">
-                  <button onClick={() => setActiveMenu('settings')} className="flex flex-col items-center gap-1 transition-colors">
-                    <User size={22} className={activeMenu === 'settings' ? "text-[#0a195c]" : "text-slate-400"} strokeWidth={2.5} />
-                    <span className={`text-[10px] font-bold ${activeMenu === 'settings' ? "text-[#0a195c]" : "text-slate-400"}`}>Profil</span>
-                  </button>
-                </div>
-              </nav>
-
-              {/* BLOK TOMBOL KAMERA YANG SUDAH DIGEMBOK */}
-              {hasMobileMenu('absen') && (
-                <div className="absolute left-1/2 -translate-x-1/2 -top-8">
-                  <button onClick={() => { if (hasAbsenMasuk && hasAbsenKeluar) return alert("Anda sudah menyelesaikan shift hari ini."); setActiveMenu('absen'); }} className="w-16 h-16 bg-[#0a195c] rounded-full flex flex-col items-center justify-center shadow-[0_8px_20px_rgba(10,25,92,0.4)] active:scale-95 transition-transform border-[3px] border-[#F4F7FB] text-white">
-                    <Camera size={26} strokeWidth={2.5}/>
-                  </button>
-                </div>
-              )}
-            </div>
+            <button onClick={() => setActiveMenu('settings')} className={`flex flex-col items-center p-2 transition-colors ${activeMenu === 'settings' ? 'text-[#0a195c]' : 'text-slate-400'}`}>
+              <Settings size={24} className={activeMenu === 'settings' ? 'drop-shadow-md' : ''}/>
+              <span className="text-[10px] font-bold mt-1">Profil</span>
+            </button>
+          </div>
         
         {/* ========================================== */}
         {/* === VIEW ABSENSI KAMERA (MODAL LAYAR PENUH) === */}
@@ -1778,58 +1974,61 @@ export default function MobileApp() {
           </div>
         </div>
 
-        {/* MODAL BUAT INSTRUKSI (DANRU) */}
-              {isInstructionModalOpen && (
-                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-center items-center p-4">
-                  <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-200">
-                    <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                      <h3 className="font-bold text-slate-800 text-sm">Buat Instruksi Lapangan</h3>
-                      <button onClick={() => setIsInstructionModalOpen(false)} className="p-1.5 bg-slate-200 text-slate-600 rounded-full active:scale-95"><X size={16}/></button>
-                    </div>
-
-                    <form onSubmit={handleCreateInstruction} className="p-5 space-y-4">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Jenis Pesan</label>
-                        <select value={instForm.broadcast_type} onChange={e => setInstForm({...instForm, broadcast_type: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none">
-                          <option value="Instruksi">Instruksi Kerja (Tugas)</option>
-                          <option value="Informasi">Informasi (Pengumuman)</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Target Penerima</label>
-                        <select value={instForm.target_type} onChange={e => setInstForm({...instForm, target_type: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none">
-                          <option value="LOCATION">Semua Anggota di Lokasi Ini</option>
-                          <option value="INDIVIDUAL">Pilih Perorangan (Bawahan)</option>
-                        </select>
-                      </div>
-                      {instForm.target_type === 'INDIVIDUAL' && (
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Pilih Bawahan</label>
-                          <select required value={instForm.target_val} onChange={e => setInstForm({...instForm, target_val: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none">
-                            <option value="">-- Pilih Anggota --</option>
-                            {/* FILTER SAKTI: HANYA TAMPILKAN NAMA YANG ID-NYA BUKAN ID MANAGER ITU SENDIRI */}
-                            {colleagues.filter(c => c.id !== currentUser.id).map(c => <option key={c.id} value={c.id}>{c.nama_lengkap}</option>)}
-                          </select>
-                        </div>
-                      )}
-
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Isi Instruksi</label>
-                        <textarea required rows="4" value={instForm.content} onChange={e => setInstForm({...instForm, content: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none resize-none"></textarea>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5">Lampiran (File/Foto)</label>
-                        <input type="file" onChange={e => setInstForm({...instForm, file: e.target.files[0]})} className="w-full text-xs" />
-                      </div>
-
-                      <button type="submit" disabled={isSubmittingInst} className="w-full bg-[#0a195c] text-white font-bold py-3.5 rounded-xl active:scale-95 disabled:opacity-50">
-                        {isSubmittingInst ? 'Mengirim...' : 'Sebarkan Instruksi'}
-                      </button>
-                    </form>
-                  </div>
+          {/* ========================================== */}
+          {/* === MODAL: BUAT INSTRUKSI === */}
+          {/* ========================================== */}
+          {isInstructionModalOpen && (
+            <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex flex-col justify-end">
+              <div className="bg-white rounded-t-3xl pt-6 pb-24 px-6 flex flex-col max-h-[85vh] shadow-2xl animate-in slide-in-from-bottom-full duration-300">
+                <div className="flex justify-between items-center mb-5">
+                   <h2 className="font-bold text-lg text-slate-800">Buat Instruksi</h2>
+                   <button onClick={() => setIsInstructionModalOpen(false)} className="p-2 bg-slate-100 rounded-full text-slate-500 active:scale-95"><X size={18}/></button>
                 </div>
-              )}
+                
+                <div className="overflow-y-auto space-y-4 custom-scrollbar">
+                   <div>
+                     <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">Jenis Broadcast</label>
+                     <select value={instForm.broadcast_type} onChange={(e) => setInstForm({...instForm, broadcast_type: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-[#0a195c]">
+                       <option value="Instruksi">Instruksi Lapangan</option>
+                       <option value="Informasi">Informasi / Pengumuman</option>
+                     </select>
+                   </div>
+                   <div>
+                     <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">Target Penerima</label>
+                     <select value={instForm.target_type} onChange={(e) => setInstForm({...instForm, target_type: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-[#0a195c]">
+                       <option value="LOCATION">Seluruh Karyawan di Lokasi Saya</option>
+                       <option value="INDIVIDUAL">Perorangan (Karyawan Tertentu)</option>
+                     </select>
+                   </div>
+                   
+                   {instForm.target_type === 'INDIVIDUAL' && (
+                     <div>
+                       <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">Pilih Karyawan</label>
+                       <select value={instForm.target_val} onChange={(e) => setInstForm({...instForm, target_val: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-[#0a195c]">
+                         <option value="">Pilih Karyawan...</option>
+                         {colleagues.map(c => <option key={c.id} value={c.id}>{c.nama_lengkap}</option>)}
+                       </select>
+                     </div>
+                   )}
+                   
+                   <div>
+                     <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">Isi Instruksi</label>
+                     <textarea value={instForm.content} onChange={(e) => setInstForm({...instForm, content: e.target.value})} rows="4" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-[#0a195c] resize-none"></textarea>
+                   </div>
+                   
+                   <div>
+                     <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">Lampiran File (Opsional)</label>
+                     <input type="file" onChange={(e) => setInstForm({...instForm, file: e.target.files[0]})} className="w-full text-xs file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-[#0a195c] file:text-white" />
+                   </div>
+                   
+                   <button onClick={handleCreateInstruction} disabled={isSubmittingInst} className="w-full mt-2 bg-[#0a195c] text-white py-3.5 rounded-xl font-bold flex justify-center items-center gap-2">
+                     {isSubmittingInst ? <RefreshCw size={18} className="animate-spin"/> : <CheckCircle2 size={18}/>}
+                     Kirim Instruksi
+                   </button>
+                </div>
+              </div>
+            </div>
+          )}
       </div>
     </div>
   );

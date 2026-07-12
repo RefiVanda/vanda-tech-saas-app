@@ -71,7 +71,107 @@ export default function ClientAdmin() {
   
   const [hrisTab, setHrisTab] = useState('absensi');
   const [hrisOverviewCabang, setHrisOverviewCabang] = useState('Semua');
-  const [financeTab, setFinanceTab] = useState('overview');
+  const [financeTab, setFinanceTab] = useState('cashflow');
+
+  // ==========================================
+  // STATE & FUNGSI FINANCE (CASHFLOW & INVOICE)
+  // ==========================================
+  
+  // STATE CASHFLOW
+  const [cashflowPeriod, setCashflowPeriod] = useState(new Date().toISOString().substring(0, 7));
+  const [isCashflowModalOpen, setIsCashflowModalOpen] = useState(false);
+  const [cashflowForm, setCashflowForm] = useState({ id: null, type: 'INCOME', category: 'Operasional', amount: '', date: new Date().toISOString().split('T')[0], description: '', reference_number: '' });
+
+  // STATE INVOICE
+  const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
+  const [invoiceForm, setInvoiceForm] = useState({
+    id: null, invoice_number: `INV-${Date.now().toString().slice(-6)}`, client_name: '', 
+    date: new Date().toISOString().split('T')[0], due_date: '', 
+    items: [{ desc: '', qty: 1, price: 0 }], 
+    tax_rate: 11, discount: 0, status: 'UNPAID', notes: ''
+  });
+
+  // FUNGSI CRUD CASHFLOW
+  const handleSaveCashflow = async (e) => {
+    e.preventDefault();
+    const payload = {
+      client_id: currentUser.client_id,
+      type: cashflowForm.type,
+      category: cashflowForm.category,
+      amount: Number(cashflowForm.amount),
+      date: cashflowForm.date,
+      description: cashflowForm.description,
+      reference_number: cashflowForm.reference_number
+    };
+
+    if (cashflowForm.id) {
+      const { error } = await supabase.from('cashflows').update(payload).eq('id', cashflowForm.id);
+      if (!error) { alert("Data Arus Kas diperbarui!"); setIsCashflowModalOpen(false); fetchAllData(); }
+      else alert("Error: " + error.message);
+    } else {
+      const { error } = await supabase.from('cashflows').insert([payload]);
+      if (!error) { alert("Data Arus Kas berhasil dicatat!"); setIsCashflowModalOpen(false); fetchAllData(); }
+      else alert("Error: " + error.message);
+    }
+  };
+
+  const handleDeleteCashflow = async (id) => {
+    if (!window.confirm("Hapus catatan transaksi ini secara permanen? Arus kas akan dihitung ulang.")) return;
+    const { error } = await supabase.from('cashflows').delete().eq('id', id);
+    if (!error) fetchAllData();
+  };
+
+  // FUNGSI LOGIKA & CRUD INVOICE
+  const handleAddInvoiceItem = () => setInvoiceForm(prev => ({ ...prev, items: [...prev.items, { desc: '', qty: 1, price: 0 }] }));
+  const handleRemoveInvoiceItem = (index) => setInvoiceForm(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
+  const handleUpdateInvoiceItem = (index, field, value) => {
+    const newItems = [...invoiceForm.items];
+    newItems[index][field] = value;
+    setInvoiceForm(prev => ({ ...prev, items: newItems }));
+  };
+
+  const handleSaveInvoice = async (e) => {
+    e.preventDefault();
+    if (invoiceForm.items.length === 0) return alert("Tambahkan minimal 1 item tagihan!");
+    
+    const subtotal = invoiceForm.items.reduce((sum, item) => sum + (Number(item.qty) * Number(item.price)), 0);
+    const tax_amount = (subtotal * Number(invoiceForm.tax_rate)) / 100;
+    const total = subtotal + tax_amount - Number(invoiceForm.discount);
+
+    const payload = {
+      client_id: currentUser.client_id,
+      invoice_number: invoiceForm.invoice_number,
+      client_name: invoiceForm.client_name,
+      date: invoiceForm.date,
+      due_date: invoiceForm.due_date,
+      items: JSON.stringify(invoiceForm.items),
+      subtotal, tax_rate: invoiceForm.tax_rate, tax_amount, discount: invoiceForm.discount, total,
+      status: invoiceForm.status, notes: invoiceForm.notes
+    };
+
+    if (invoiceForm.id) {
+      const { error } = await supabase.from('invoices').update(payload).eq('id', invoiceForm.id);
+      if (!error) { alert("Invoice diperbarui!"); setIsInvoiceModalOpen(false); fetchAllData(); }
+    } else {
+      const { error } = await supabase.from('invoices').insert([payload]);
+      if (!error) { alert("Invoice diterbitkan!"); setIsInvoiceModalOpen(false); fetchAllData(); }
+    }
+  };
+
+  const handleUpdateInvoiceStatus = async (id, newStatus, totalAmount, clientName) => {
+    if (newStatus === 'PAID') {
+      if(window.confirm(`Tandai Lunas dan otomatis catat Rp ${totalAmount} ke Arus Kas Pemasukan?`)) {
+         await supabase.from('cashflows').insert([{
+            client_id: currentUser.client_id, type: 'INCOME', category: 'Pembayaran Invoice',
+            amount: totalAmount, date: new Date().toISOString().split('T')[0],
+            description: `Pembayaran Lunas untuk klien: ${clientName}`
+         }]);
+      }
+    }
+    const { error } = await supabase.from('invoices').update({ status: newStatus }).eq('id', id);
+    if (!error) fetchAllData();
+  };
+
   const [laporanTab, setLaporanTab] = useState('patroli');
   const [settingTab, setSettingTab] = useState('gps_rules');
   const [rekrutmenSubTab, setRekrutmenSubTab] = useState('PENDING');
@@ -80,7 +180,16 @@ export default function ClientAdmin() {
   const [shifts, setShifts] = useState([]);
   const [filterShiftBulan, setFilterShiftBulan] = useState(new Date().toISOString().substring(0, 7));
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
-  const [shiftForm, setShiftForm] = useState({ id: null, employee_id: '', date: '', shift_type: 'Pagi', time_in: '08:00', time_out: '17:00' });
+  const [shiftForm, setShiftForm] = useState({ 
+    id: null, 
+    employee_id: '', 
+    start_date: '', 
+    end_date: '', 
+    shift_type: 'Pagi', 
+    time_in: '08:00', 
+    time_out: '17:00',
+    is_bko: false // Penanda apakah ini shift bantuan (BKO)
+  });
   const importShiftRef = useRef(null);
 
   // State & Ref untuk fitur ambil foto langsung dari kamera
@@ -122,6 +231,39 @@ export default function ClientAdmin() {
 
   // KEYWORD_PROFILE_REFI: State untuk modal Profil
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+
+  // FUNGSI: DIRECT DOWNLOAD PDF (Inject Library Otomatis)
+  const handleDownloadPDF = (elementId, fileName) => {
+    const element = document.getElementById(elementId);
+    if (!element) return alert("Elemen dokumen tidak ditemukan!");
+
+    const generate = () => {
+      const opt = {
+        margin:       [10, 10, 10, 10],
+        filename:     fileName,
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2, useCORS: true, logging: false },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
+      
+      // Tambahkan catch error agar tidak stuck
+      window.html2pdf().set(opt).from(element).save().catch(err => {
+         alert("Gagal memproses PDF: " + err.message);
+      });
+    };
+
+    if (typeof window.html2pdf === 'undefined') {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+      script.onload = generate;
+      // Beri notifikasi jika library gagal dimuat (internet/adblock)
+      script.onerror = () => alert("Gagal memuat sistem PDF. Pastikan internet Anda stabil dan matikan AdBlocker sementara.");
+      document.head.appendChild(script);
+    } else {
+      generate();
+    }
+  };
+
   const [profileForm, setProfileForm] = useState({ password: '', file: null, avatar_url: '', avatar_path: '' });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
@@ -215,7 +357,7 @@ export default function ClientAdmin() {
 
     // CRITICAL: Panggil fungsi langsung menggunakan data dari session (Mencegah ID Kosong)
     fetchAllData(parsedSession.id, parsedSession.role);
-  }, []);
+  }, [navigate]);
 
   // 2. UPDATE fetchAllData (Menggunakan Smart Detector & Isolasi Multi-Tenant)
   const fetchAllData = async (userId, sessionRole) => {
@@ -227,10 +369,10 @@ export default function ClientAdmin() {
       const isValidUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId);
       
       if (isValidUUID) {
-        const { data } = await supabase.from('employees').select('id, client_id, role, clients(status, features)').eq('id', targetId).single();
+        const { data } = await supabase.from('employees').select('id, client_id, role, clients(name, status, features)').eq('id', targetId).single();
         myProfile = data;
       } else {
-        const { data } = await supabase.from('employees').select('id, client_id, role, clients(status, features)').eq('nik_karyawan', targetId).single();
+        const { data } = await supabase.from('employees').select('id, client_id, role, clients(name, status, features)').eq('nik_karyawan', targetId).single();
         myProfile = data;
       }
 
@@ -251,6 +393,23 @@ export default function ClientAdmin() {
       // Tambahkan ? setelah myProfile agar tidak error jika data sempat kosong
       const clientFeatures = myProfile?.clients?.features || {};
       setCurrentUser(prev => ({ ...prev, id: myProfile?.id, client_id: myClientId, role: myRole, features: clientFeatures }));
+      // --- PERBAIKAN: Set Nama & Inisial Perusahaan Secara Otomatis ---
+      if (myProfile?.clients?.name) {
+        const companyName = myProfile.clients.name;
+        const shortName = companyName
+          .replace(/^(PT|CV|UD|Tbk)\.?\s+/i, '')
+          .split(' ')
+          .map(word => word[0])
+          .join('')
+          .toUpperCase()
+          .substring(0, 3) || "ADM";
+
+        setAppConfig(prev => ({
+          ...prev,
+          name: companyName,
+          short: shortName
+        }));
+      }
 
       // =================================================================
       // ALAT PENARIK DATA (WAJIB DIBUAT SEBELUM MENARIK DATA APAPUN)
@@ -260,6 +419,66 @@ export default function ClientAdmin() {
         if (!isSuper && myClientId) q = q.eq('client_id', myClientId);
         return q;
       };
+
+      const fetchUserData = async (userId, parsedSession) => {
+      try {
+        // PERBAIKAN: Tambahkan 'name' ke dalam select relasi clients
+        const { data, error } = await supabase.from('employees')
+          .select('client_id, nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti, lokasi_penempatan, clients(name, status)')
+          .eq('nik_karyawan', parsedSession.nik).single(); 
+
+        if (error) throw error;
+        
+        if (data) {
+          if (data.clients && data.clients.status === 'SUSPENDED') {
+            alert("Akses Perusahaan dibekukan oleh Pusat. Silakan hubungi HRD Anda.");
+            localStorage.removeItem('vest_user_session');
+            navigate('/');
+            return;
+          }
+
+          setCurrentUser({
+            id: parsedSession.id,
+            client_id: data.client_id,
+            nik: parsedSession.nik,
+            name: data.nama_lengkap,
+            role: data.role,
+            division: data.bidang_jasa,
+            permissions: data.permissions || {},
+            avatar: data.avatar_url,
+            avatar_url: data.avatar_url,
+            sisa_cuti: data.sisa_cuti || 0,
+            location: data.lokasi_penempatan
+          });
+          
+          if (data.permissions) {
+            setPermissions(data.permissions);
+          }
+
+          // --- TAMBAHAN PERBAIKAN: Set Nama & Inisial Perusahaan Secara Otomatis ---
+          if (data.clients) {
+            const companyName = data.clients.name || "Perusahaan";
+            // Rumus otomatis membuang kata PT/CV/UD lalu mengambil huruf depan tiap kata untuk inisial
+            const shortName = companyName
+              .replace(/^(PT|CV|UD|Tbk)\.?\s+/i, '')
+              .split(' ')
+              .map(word => word[0])
+              .join('')
+              .toUpperCase()
+              .substring(0, 3) || "KM";
+
+            setAppConfig(prev => ({
+              ...prev,
+              name: companyName,
+              short: shortName
+            }));
+          }
+          
+        }
+      } catch (err) {
+        console.error("Gagal menarik data profil:", err);
+      }
+    };
 
       // =================================================================
       // PROSES PENARIKAN DATA
@@ -302,13 +521,21 @@ export default function ClientAdmin() {
       const { data: roleData } = await buildQuery('company_roles').order('name', { ascending: true });
       if (roleData) setCompanyRoles(roleData);
 
-      const { data: clientDataRes } = await supabase.from('clients').select('*').order('name', { ascending: true });
+      // PERBAIKAN 1: Isolasi Nama Klien agar tidak bocor ke klien/perusahaan lain
+      let qClients = supabase.from('clients').select('*').order('name', { ascending: true });
+      if (!isSuper && myClientId) qClients = qClients.eq('id', myClientId);
+      const { data: clientDataRes } = await qClients;
       if (clientDataRes) setClientsList(clientDataRes); 
       
       const { data: locData } = await buildQuery('office_locations');
       if (locData) setOfficeLocations(locData);
+      
       const { data: instData } = await buildQuery('instructions', '*, employees!sender_id(nama_lengkap, posisi_jabatan)').order('created_at', { ascending: false });
       if (instData) setInstructions(instData);
+
+      // PERBAIKAN 2: Penarikan Data Recruitment / Pelamar dengan Isolasi Ketat
+      const { data: candData } = await buildQuery('candidates').order('created_at', { ascending: false });
+      if (candData) setCandidates(candData);
 
     } catch (error) {
       console.error("Gagal menarik data:", error);
@@ -640,24 +867,53 @@ export default function ClientAdmin() {
 
   const handleSaveShift = async (e) => {
     e.preventDefault();
-    if(!shiftForm.employee_id || !shiftForm.date) return alert("Pilih pegawai dan tanggal!");
+    if(!shiftForm.employee_id || !shiftForm.start_date) return alert("Pilih pegawai dan tanggal mulai!");
 
-    const payload = {
-      client_id: currentUser.client_id,
-      employee_id: shiftForm.employee_id,
-      date: shiftForm.date,
-      shift_type: shiftForm.shift_type,
-      time_in: shiftForm.time_in ? shiftForm.time_in + ':00' : null,
-      time_out: shiftForm.time_out ? shiftForm.time_out + ':00' : null
-    };
+    // Konversi string tanggal ke format yang aman dari zona waktu
+    const startParts = shiftForm.start_date.split('-');
+    let currentDate = new Date(startParts[0], startParts[1] - 1, startParts[2]);
+    
+    const endParts = shiftForm.end_date ? shiftForm.end_date.split('-') : startParts;
+    let endDate = new Date(endParts[0], endParts[1] - 1, endParts[2]);
 
-    if (shiftForm.id) {
-      const { error } = await supabase.from('employee_shifts').update(payload).eq('id', shiftForm.id);
+    if (endDate < currentDate) return alert("Tanggal Selesai tidak boleh lebih kecil dari Tanggal Mulai!");
+
+    const payloads = [];
+    
+    // Looping dari tanggal mulai sampai tanggal selesai
+    while (currentDate <= endDate) {
+      const year = currentDate.getFullYear();
+      const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+      const day = String(currentDate.getDate()).padStart(2, '0');
+      const dateString = `${year}-${month}-${day}`;
+
+      // Sisipkan "(BKO)" pada Tipe Shift jika dicentang
+      const finalShiftType = shiftForm.is_bko ? `${shiftForm.shift_type} (BKO)` : shiftForm.shift_type;
+
+      payloads.push({
+        id: shiftForm.id ? shiftForm.id : undefined, // Bawa ID jika sedang mode EDIT 1 hari
+        client_id: currentUser.client_id,
+        employee_id: shiftForm.employee_id,
+        date: dateString,
+        shift_type: finalShiftType,
+        time_in: shiftForm.time_in ? shiftForm.time_in + (shiftForm.time_in.length === 5 ? ':00' : '') : null,
+        time_out: shiftForm.time_out ? shiftForm.time_out + (shiftForm.time_out.length === 5 ? ':00' : '') : null
+      });
+
+      // Tambah 1 hari
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    if (shiftForm.id && payloads.length === 1) {
+      // MODE EDIT (Update 1 Data Saja)
+      const { error } = await supabase.from('employee_shifts').update(payloads[0]).eq('id', shiftForm.id);
       if (!error) { alert('Jadwal diperbarui!'); setIsShiftModalOpen(false); fetchAllData(); }
       else alert('Gagal update: ' + error.message);
     } else {
-      const { error } = await supabase.from('employee_shifts').upsert([payload], { onConflict: 'employee_id, date' });
-      if (!error) { alert('Jadwal berhasil ditambahkan!'); setIsShiftModalOpen(false); fetchAllData(); }
+      // MODE CREATE MASSAL (Bisa 1 hari atau banyak hari)
+      const insertPayloads = payloads.map(p => { const {id, ...rest} = p; return rest; }); // Buang undefined id
+      const { error } = await supabase.from('employee_shifts').upsert(insertPayloads, { onConflict: 'employee_id, date' });
+      if (!error) { alert(`Berhasil menyimpan ${insertPayloads.length} jadwal!`); setIsShiftModalOpen(false); fetchAllData(); }
       else alert('Gagal menambah jadwal: ' + error.message);
     }
   };
@@ -1106,10 +1362,8 @@ export default function ClientAdmin() {
         if (employee) {
           const stats = calculateWorkStats(employee.id, payrollPeriod);
           let basicSalary = Number(row["Gaji_Pokok"]) || 0;
-          let additions = [];
-          let deductions = [];
-          let totalAdditions = 0;
-          let totalDeductions = 0;
+          let additions = []; let deductions = [];
+          let totalAdditions = 0; let totalDeductions = 0;
 
           Object.keys(row).forEach(key => {
             const value = Number(row[key]) || 0;
@@ -1139,8 +1393,20 @@ export default function ClientAdmin() {
       if (successData.length > 0) {
         await supabase.from('payrolls').delete().eq('client_id', currentUser.client_id).eq('period', payrollPeriod);
         const { error } = await supabase.from('payrolls').insert(successData);
-        if (!error) { alert(`Selesai! ${successData.length} data Gaji berhasil diproses.`); fetchAllData(); } 
-        else alert("Database Error: " + error.message);
+        if (!error) { 
+           const totalNet = successData.reduce((sum, p) => sum + p.net_salary, 0);
+           // PROMPT OTOMATIS KE ARUS KAS (MASSAL)
+           if(window.confirm(`Selesai! ${successData.length} data Gaji berhasil diproses.\nCatat total keseluruhan (Grand Netto) Rp ${totalNet} ke Arus Kas sebagai Pengeluaran?`)) {
+              await supabase.from('cashflows').insert([{
+                 client_id: currentUser.client_id, type: 'EXPENSE', category: 'Pembayaran Gaji Massal',
+                 amount: totalNet, date: new Date().toISOString().split('T')[0],
+                 description: `Gaji massal periode ${payrollPeriod} untuk ${successData.length} karyawan`
+              }]);
+           }
+           fetchAllData(); 
+        } else {
+           alert("Database Error: " + error.message);
+        }
       }
       if(importPayrollRef.current) importPayrollRef.current.value = '';
     };
@@ -1198,7 +1464,21 @@ export default function ClientAdmin() {
 
     await supabase.from('payrolls').delete().eq('employee_id', employee.id).eq('period', payrollPeriod);
     const { error } = await supabase.from('payrolls').insert([payload]);
-    if (!error) { alert("Berhasil!"); setIsPayrollModalOpen(false); fetchAllData(); } else alert("Error: " + error.message);
+    
+    if (!error) { 
+      // PROMPT OTOMATIS KE ARUS KAS (CASHFLOW)
+      if(window.confirm(`Gaji berhasil dihitung! Catat total gaji bersih Rp ${netSalary} ke Arus Kas (Pengeluaran)?`)) {
+         await supabase.from('cashflows').insert([{
+            client_id: currentUser.client_id, type: 'EXPENSE', category: 'Pembayaran Gaji (Payroll)',
+            amount: netSalary, date: new Date().toISOString().split('T')[0],
+            description: `Gaji periode ${payrollPeriod} untuk ${employee.nama_lengkap}`
+         }]);
+      }
+      setIsPayrollModalOpen(false); 
+      fetchAllData(); 
+    } else {
+      alert("Error: " + error.message);
+    }
   };
 
   // ==========================================
@@ -1225,16 +1505,32 @@ export default function ClientAdmin() {
     return perms?.[moduleId]?.[action] === true;
   };
 
-  // Konfigurasi Bawaan UI App
-  const appConfig = {
-    name: "PT Klien Nusantara",
-    short: "KN",
+  // KALKULATOR OVERVIEW & ARUS KAS
+  const globalIncome = cashflows.filter(c => c.type === 'INCOME').reduce((sum, c) => sum + Number(c.amount), 0);
+  const globalExpense = cashflows.filter(c => c.type === 'EXPENSE').reduce((sum, c) => sum + Number(c.amount), 0);
+  const globalBalance = globalIncome - globalExpense;
+
+  const currentMonthCashflows = cashflows.filter(c => c.date.startsWith(cashflowPeriod));
+  const monthIncome = currentMonthCashflows.filter(c => c.type === 'INCOME').reduce((sum, c) => sum + Number(c.amount), 0);
+  const monthExpense = currentMonthCashflows.filter(c => c.type === 'EXPENSE').reduce((sum, c) => sum + Number(c.amount), 0);
+
+  const [appConfig, setAppConfig] = useState({
+    name: "Loading Perusahaan...",
+    short: "..",
     color: "bg-blue-600",
     text: "text-blue-600",
     light: "bg-blue-50"
-  };
+  });
 
-  const formatRupiah = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka || 0);
+  // --- TAMBAHAN PERBAIKAN: Fungsi Format Rupiah ---
+  const formatRupiah = (number) => {
+    if (number === undefined || number === null) return "Rp 0";
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0
+    }).format(number);
+  };
 
   const activeEmployees = employees.filter(e => e.status === 'INTI' || !e.status);
   const employeesWithTaskAccess = activeEmployees.filter(e => e.hasTaskAccess);
@@ -2669,16 +2965,42 @@ export default function ClientAdmin() {
             {/* FINANCE DASHBOARD */}
             {activeMenu === 'finance' && (
               <div className="space-y-6 fade-in">
+                
+                {/* 1. HEADER TITLE */}
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                   <div>
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Finance & Accounting</h2>
-                    <p className="text-slate-500 text-sm mt-1">Kelola arus kas, penggajian, dan tagihan invoice perusahaan.</p>
+                    <p className="text-slate-500 text-sm mt-1">Kelola arus kas, penggajian, dan tagihan invoice perusahaan secara terintegrasi.</p>
                   </div>
                 </div>
 
+                {/* 2. DYNAMIC OVERVIEW DENGAN DATA REAL DATABASE (SEKARANG PERMANEN DI ATAS NAV BAR) */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-in fade-in duration-300">
+                  <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 shadow-lg flex flex-col justify-center relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/20 blur-2xl rounded-full -translate-y-1/2 translate-x-1/2"></div>
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Saldo Kas Aktif (Global)</span>
+                    <h3 className="text-3xl font-black text-emerald-400">{formatRupiah(globalBalance)}</h3>
+                    <p className="text-[9px] text-slate-400 mt-3 border-t border-slate-800 pt-2 leading-relaxed">Total Akumulasi Seluruh Pemasukan dikurangi Pengeluaran.</p>
+                  </div>
+                  
+                  <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
+                    <div className="absolute right-6 opacity-10"><TrendingUp size={48} className="text-blue-500"/></div>
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Pemasukan (Bulan Ini)</span>
+                    <h3 className="text-2xl font-black text-slate-800">{formatRupiah(monthIncome)}</h3>
+                    <p className="text-[9px] text-slate-500 mt-3 border-t border-slate-100 pt-2 leading-relaxed">Total arus kas masuk (INCOME) pada periode bulan terpilih.</p>
+                  </div>
+                  
+                  <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
+                    <div className="absolute right-6 opacity-10"><TrendingDown size={48} className="text-rose-500"/></div>
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Pengeluaran (Bulan Ini)</span>
+                    <h3 className="text-2xl font-black text-slate-800">{formatRupiah(monthExpense)}</h3>
+                    <p className="text-[9px] text-slate-500 mt-3 border-t border-slate-100 pt-2 leading-relaxed">Total biaya operasional & penggajian (EXPENSE) pada bulan terpilih.</p>
+                  </div>
+                </div>
+
+                {/* 3. NAV BAR TAB FINANCE (Disesuaikan Menjadi 3 Kontrol Utama) */}
                 <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
                   {[
-                    { id: 'overview', icon: LayoutDashboard, label: 'Overview' },
                     { id: 'cashflow', icon: Wallet, label: 'Arus Kas' },
                     { id: 'payroll', icon: CreditCard, label: 'Penggajian' },
                     { id: 'invoice', icon: Receipt, label: 'Tagihan Invoice' },
@@ -2693,35 +3015,63 @@ export default function ClientAdmin() {
                   ))}
                 </div>
 
-                {financeTab === 'overview' && (
+                {/* 4. ISI KONTEN SUB-MODUL FINANCE */}
+                {financeTab === 'cashflow' && (
                   <div className="space-y-6 fade-in">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 shadow-lg flex flex-col justify-center relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/20 blur-2xl rounded-full -translate-y-1/2 translate-x-1/2"></div>
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Saldo Kas Aktif</span>
-                        <h3 className="text-3xl font-black text-emerald-400">Rp 45.500.000</h3>
-                        <p className="text-[9px] text-slate-400 mt-3 border-t border-slate-800 pt-2 leading-relaxed">Total Pemasukan dikurangi Pengeluaran.</p>
+                    <div className="bg-white p-4 border border-slate-200 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+                      <div className="flex items-center gap-3 w-full md:w-auto">
+                        <span className="text-sm font-bold text-slate-500">Bulan Laporan:</span>
+                        <input type="month" value={cashflowPeriod} onChange={e => setCashflowPeriod(e.target.value)} className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-[#0a195c] outline-none focus:border-blue-500 flex-1 md:flex-none" />
                       </div>
-                      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
-                        <div className="absolute right-6 opacity-10"><TrendingUp size={48} className="text-blue-500"/></div>
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Pemasukan (Bulan Ini)</span>
-                        <h3 className="text-2xl font-black text-slate-800">Rp 25.000.000</h3>
-                        <p className="text-[9px] text-slate-500 mt-3 border-t border-slate-100 pt-2 leading-relaxed">Total Transaksi INCOME berstatus LUNAS.</p>
+                      <div className="flex gap-2 w-full md:w-auto">
+                        {hasPermission('finance', 'create') && (
+                          <>
+                            <button onClick={() => { setCashflowForm({ id: null, type: 'INCOME', category: 'Pendapatan', amount: '', date: new Date().toISOString().split('T')[0], description: '', reference_number: '' }); setIsCashflowModalOpen(true); }} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold transition-all border border-emerald-200 flex-1 md:flex-none flex items-center justify-center gap-2"><Plus size={14}/> Catat Pemasukan</button>
+                            <button onClick={() => { setShiftForm({ id: null, employee_id: '', date: '', shift_type: 'Pagi', time_in: '08:00', time_out: '17:00' }); setCashflowForm({ id: null, type: 'EXPENSE', category: 'Operasional', amount: '', date: new Date().toISOString().split('T')[0], description: '', reference_number: '' }); setIsCashflowModalOpen(true); }} className="bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2 rounded-xl text-xs font-bold transition-all border border-rose-200 flex-1 md:flex-none flex items-center justify-center gap-2"><Plus size={14}/> Catat Pengeluaran</button>
+                          </>
+                        )}
                       </div>
-                      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
-                        <div className="absolute right-6 opacity-10"><TrendingDown size={48} className="text-red-500"/></div>
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Pengeluaran (Bulan Ini)</span>
-                        <h3 className="text-2xl font-black text-slate-800">Rp 4.700.000</h3>
-                        <p className="text-[9px] text-slate-500 mt-3 border-t border-slate-100 pt-2 leading-relaxed">Total Transaksi EXPENSE berstatus LUNAS.</p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                          <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                            <tr><th className="px-6 py-4">Tgl & Ref</th><th className="px-6 py-4">Kategori & Keterangan</th><th className="px-6 py-4">Tipe Transaksi</th><th className="px-6 py-4">Nominal</th><th className="px-6 py-4 text-center">Aksi</th></tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-sm">
+                            {currentMonthCashflows.map(cf => (
+                              <tr key={cf.id} className="hover:bg-slate-50">
+                                <td className="px-6 py-4">
+                                  <span className="font-bold text-slate-700 block">{cf.date}</span>
+                                  <span className="text-[10px] font-medium text-slate-400">Ref: {cf.reference_number || '-'}</span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className="font-bold text-slate-800 block text-xs">{cf.category}</span>
+                                  <span className="text-[11px] text-slate-500">{cf.description}</span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${cf.type === 'INCOME' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-rose-50 text-rose-600 border-rose-200'}`}>{cf.type === 'INCOME' ? 'Pemasukan' : 'Pengeluaran'}</span>
+                                </td>
+                                <td className="px-6 py-4 font-black text-slate-700">{formatRupiah(cf.amount)}</td>
+                                <td className="px-6 py-4 text-center">
+                                  <div className="flex justify-center gap-2">
+                                    {hasPermission('finance', 'edit') && <button onClick={() => { setCashflowForm(cf); setIsCashflowModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100"><FileText size={14}/></button>}
+                                    {hasPermission('finance', 'delete') && <button onClick={() => handleDeleteCashflow(cf.id)} className="p-1.5 bg-rose-50 text-rose-600 rounded hover:bg-rose-100"><Trash2 size={14}/></button>}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                            {currentMonthCashflows.length === 0 && <tr><td colSpan="5" className="text-center py-10 text-slate-400 font-bold bg-slate-50/50">Tidak ada riwayat transaksi pada periode ini.</td></tr>}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   </div>
                 )}
-                {/* KEYWORD_PAYROLL_REFI: Modul UI Penggajian (Payroll) */}
+
                 {financeTab === 'payroll' && (
                   <div className="space-y-6 fade-in">
-                    
-                    {/* SETTING TARIF DENDA GLOBAL (UNTUK EXCEL & MANUAL) */}
                     <div className="bg-rose-50/50 border border-rose-100 p-4 rounded-2xl shadow-sm">
                       <p className="text-[10px] font-black text-rose-800 uppercase tracking-widest mb-3 flex items-center gap-2"><Clock size={14}/> Pengaturan Tarif Potongan Kehadiran (Opsional)</p>
                       <div className="flex flex-col md:flex-row gap-4">
@@ -2739,7 +3089,6 @@ export default function ClientAdmin() {
                       </div>
                     </div>
 
-                    {/* Header Kontrol Payroll */}
                     <div className="bg-white p-4 border border-slate-200 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
                       <div className="flex items-center gap-3 w-full md:w-auto">
                         <span className="text-sm font-bold text-slate-500">Periode Gaji:</span>
@@ -2755,7 +3104,7 @@ export default function ClientAdmin() {
                         {hasPermission('finance', 'create') && (
                           <>
                             <input type="file" accept=".xlsx, .xls" ref={importPayrollRef} onChange={handleImportPayroll} className="hidden" />
-                            <button onClick={() => importPayrollRef.current.click()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 flex-1 md:flex-none justify-center">
+                            <button onClick={() => importPayrollRef.click()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 flex-1 md:flex-none justify-center">
                                <RefreshCw size={14}/> Import Data Excel
                             </button>
                             <button onClick={() => {
@@ -2769,7 +3118,6 @@ export default function ClientAdmin() {
                       </div>
                     </div>
 
-                    {/* Tabel Data Gaji Bulan Terpilih */}
                     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                       <div className="overflow-x-auto">
                         <table className="w-full text-left">
@@ -2826,6 +3174,64 @@ export default function ClientAdmin() {
                     </div>
                   </div>
                 )}
+
+                {financeTab === 'invoice' && (
+                  <div className="space-y-6 fade-in">
+                    <div className="flex justify-between items-center bg-white p-4 border border-slate-200 rounded-2xl shadow-sm">
+                      <div>
+                        <h3 className="font-bold text-slate-800 text-sm">Manajemen Piutang & Tagihan</h3>
+                        <p className="text-[10px] text-slate-500">Buat, lacak, dan konversi invoice langsung ke pendapatan kas.</p>
+                      </div>
+                      {hasPermission('finance', 'create') && (
+                        <button onClick={() => {
+                          setInvoiceForm({ id: null, invoice_number: `INV-${Date.now().toString().slice(-6)}`, client_name: '', date: new Date().toISOString().split('T')[0], due_date: '', items: [{ desc: '', qty: 1, price: 0 }], tax_rate: 11, discount: 0, status: 'UNPAID', notes: '' });
+                          setIsInvoiceModalOpen(true);
+                        }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2"><Plus size={14}/> Buat Invoice</button>
+                      )}
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                          <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                            <tr><th className="px-6 py-4">No. Invoice & Klien</th><th className="px-6 py-4">Timeline</th><th className="px-6 py-4">Total Tagihan</th><th className="px-6 py-4">Status Pembayaran</th><th className="px-6 py-4 text-center">Aksi</th></tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-sm">
+                            {invoices.map(inv => (
+                              <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-6 py-4">
+                                  <span className="font-black text-slate-800 block">{inv.invoice_number}</span>
+                                  <span className="text-xs font-bold text-slate-500">{inv.client_name}</span>
+                                </td>
+                                <td className="px-6 py-4 text-xs font-medium text-slate-600">
+                                  <span className="block mb-1">Diterbitkan: {inv.date}</span>
+                                  <span className="block text-rose-600 font-bold">Jatuh Tempo: {inv.due_date}</span>
+                                </td>
+                                <td className="px-6 py-4 font-black text-slate-800">{formatRupiah(inv.total)}</td>
+                                <td className="px-6 py-4">
+                                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${inv.status === 'PAID' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : inv.status === 'UNPAID' ? 'bg-amber-50 text-amber-600 border-amber-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>{inv.status}</span>
+                                </td>
+                                <td className="px-6 py-4 text-center">
+                                  {hasPermission('finance', 'edit') && inv.status !== 'PAID' && (
+                                    <div className="flex justify-center gap-2">
+                                      <button onClick={() => {
+                                        setInvoiceForm({ ...inv, items: typeof inv.items === 'string' ? JSON.parse(inv.items) : inv.items });
+                                        setIsInvoiceModalOpen(true);
+                                      }} className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold hover:bg-blue-100">Edit</button>
+                                      <button onClick={() => handleUpdateInvoiceStatus(inv.id, 'PAID', inv.total, inv.client_name)} className="px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-xs font-bold hover:bg-emerald-100">Lunas</button>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                            {invoices.length === 0 && <tr><td colSpan="5" className="text-center py-10 text-slate-400 font-bold bg-slate-50/50">Belum ada tagihan terdaftar.</td></tr>}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
               </div>
             )}
 
@@ -2841,7 +3247,7 @@ export default function ClientAdmin() {
                     {hasPermission('shift', 'create') && (
                       <>
                         <input type="file" accept=".xlsx, .xls" ref={importShiftRef} onChange={handleImportShift} className="hidden" />
-                        <button onClick={() => { setShiftForm({ id: null, employee_id: '', date: '', shift_type: 'Pagi', time_in: '08:00', time_out: '17:00' }); setIsShiftModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2"><Plus size={14}/> Tambah Manual</button>
+                        <button onClick={() => { setShiftForm({ id: null, employee_id: '', start_date: '', end_date: '', shift_type: 'Pagi', time_in: '08:00', time_out: '17:00', is_bko: false }); setIsShiftModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2"><Plus size={14}/> Tambah Manual</button>
                         <button onClick={() => importShiftRef.current.click()} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2"><Upload size={14}/> Import Jadwal (Excel)</button>
                       </>
                     )}
@@ -2876,7 +3282,7 @@ export default function ClientAdmin() {
                             <td className="px-6 py-4 font-black text-slate-700">{shift.time_in ? shift.time_in.substring(0,5) : 'OFF'} <span className="text-slate-400 mx-1">-</span> {shift.time_out ? shift.time_out.substring(0,5) : 'OFF'}</td>
                             <td className="px-6 py-4 text-center">
                                {hasPermission('shift', 'edit') && (
-                                  <button onClick={() => { setShiftForm({ id: shift.id, employee_id: shift.employee_id, date: shift.date, shift_type: shift.shift_type, time_in: shift.time_in ? shift.time_in.substring(0,5) : '', time_out: shift.time_out ? shift.time_out.substring(0,5) : '' }); setIsShiftModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 mr-2"><FileText size={16}/></button>
+                                  <button onClick={() => { setShiftForm({ id: shift.id, employee_id: shift.employee_id, start_date: shift.date, end_date: '', shift_type: shift.shift_type.replace(' (BKO)', ''), time_in: shift.time_in ? shift.time_in.substring(0,5) : '', time_out: shift.time_out ? shift.time_out.substring(0,5) : '', is_bko: shift.shift_type.includes('(BKO)') }); setIsShiftModalOpen(true); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 mr-2"><FileText size={16}/></button>
                                )}
                                {hasPermission('shift', 'delete') && (
                                   <button onClick={async () => { if(window.confirm('Hapus jadwal ini?')) { await supabase.from('employee_shifts').delete().eq('id', shift.id); fetchAllData(); } }} className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100"><Trash2 size={16}/></button>
@@ -3654,7 +4060,7 @@ export default function ClientAdmin() {
               <div className="p-6 space-y-6 overflow-y-auto max-h-[60vh] custom-scrollbar">
                 {/* Otoritas Menu Mobile App */}
                 <div>
-                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Akses Menu Laporan</h4>
+                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Akses Menu dashboard admin</h4>
                   <div className="space-y-2">
                     <label className="flex items-center justify-between p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
                       <span className="text-sm font-bold text-slate-700">Laporan Reguler</span>
@@ -3677,7 +4083,9 @@ export default function ClientAdmin() {
                 <div>
                   <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Override Menu Mobile App</h4>
                   <div className="grid grid-cols-2 gap-2">
-                    {['absen', 'laporan', 'pengajuan', 'task', 'slip'].map(menu => {
+                    {['absen', 'laporan', 'pengajuan', 'task', 'slip']
+                            .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) // <-- Proteksi Super Admin
+                            .map(menu => {
                       let isChecked = false;
                       if (editPermissions?.mobile && editPermissions.mobile[menu] !== undefined) {
                          isChecked = editPermissions.mobile[menu];
@@ -4056,7 +4464,10 @@ export default function ClientAdmin() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-sm font-semibold text-slate-700">
-                          {menuModules.filter(m => m.id !== 'mobile').map(module => (
+                          {menuModules
+                            .filter(m => m.id !== 'mobile')
+                            .filter(m => currentUser?.features?.[m.id] !== false) // <-- Proteksi Super Admin
+                            .map(module => (
                             <tr key={module.id} className="hover:bg-indigo-50/30 transition-colors">
                               <td className="px-4 py-3 border-r border-slate-100 bg-slate-50/50">{module.label}</td>
                               
@@ -4098,7 +4509,9 @@ export default function ClientAdmin() {
                       <div className="mt-6">
                         <h4 className="text-xs font-black text-slate-800 uppercase mb-3">Akses Menu Aplikasi Mobile (Bawaan Role)</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                          {['absen', 'laporan', 'pengajuan', 'task', 'slip'].map(menu => {
+                          {['absen', 'laporan', 'pengajuan', 'task', 'slip']
+                          .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) // <-- Proteksi Super Admin
+                          .map(menu => {
                             // Pastikan membaca data dengan aman
                             const isChecked = roleForm?.permissions?.mobile?.[menu] === true;
                             
@@ -4152,34 +4565,56 @@ export default function ClientAdmin() {
                 <button type="button" onClick={() => setIsShiftModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
               </div>
               <form onSubmit={handleSaveShift} className="flex flex-col">
-                <div className="p-6 space-y-4 overflow-y-auto bg-white max-h-[70vh]">
+                <div className="p-6 space-y-4 overflow-y-auto bg-white max-h-[70vh] custom-scrollbar">
                   <div>
                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Pilih Karyawan</label>
                     <select required disabled={!!shiftForm.id} value={shiftForm.employee_id} onChange={e => setShiftForm({...shiftForm, employee_id: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50">
                        <option value="">-- Pilih Pegawai --</option>
-                       {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.nama_lengkap} ({emp.nik_karyawan})</option>)}
+                       {/* FILTER PINTAR: Sembunyikan Developer, Super Admin, dan Pegawai Nonaktif */}
+                       {employees
+                        .filter(emp => emp.role !== 'Developer' && emp.role !== 'Super Admin' && emp.status_pegawai !== 'NONAKTIF')
+                        .map(emp => (
+                          <option key={emp.id} value={emp.id}>{emp.nama_lengkap} ({emp.nik_karyawan})</option>
+                        ))}
                     </select>
                   </div>
+
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Tanggal</label>
-                      <input required disabled={!!shiftForm.id} type="date" value={shiftForm.date} onChange={e => setShiftForm({...shiftForm, date: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Mulai Tgl</label>
+                      <input required disabled={!!shiftForm.id} type="date" value={shiftForm.start_date} onChange={e => setShiftForm({...shiftForm, start_date: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
                     </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Sampai Tgl (Opsional)</label>
+                      <input disabled={!!shiftForm.id} type="date" value={shiftForm.end_date} onChange={e => setShiftForm({...shiftForm, end_date: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 placeholder-slate-400" title="Kosongkan jika hanya untuk 1 hari" />
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-4">
                     <div>
                       <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Tipe Shift</label>
-                      <input required type="text" placeholder="Cth: Pagi / Malam" value={shiftForm.shift_type} onChange={e => setShiftForm({...shiftForm, shift_type: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
+                      <input required type="text" placeholder="Cth: Pagi / Malam / Reguler" value={shiftForm.shift_type} onChange={e => setShiftForm({...shiftForm, shift_type: e.target.value})} className="w-full px-4 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-white"/>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Jam Masuk</label>
+                        <input type="time" value={shiftForm.time_in} onChange={e => setShiftForm({...shiftForm, time_in: e.target.value})} className="w-full px-4 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-white"/>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Jam Keluar</label>
+                        <input type="time" value={shiftForm.time_out} onChange={e => setShiftForm({...shiftForm, time_out: e.target.value})} className="w-full px-4 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-white"/>
+                      </div>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Jam Masuk</label>
-                      <input type="time" value={shiftForm.time_in} onChange={e => setShiftForm({...shiftForm, time_in: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
+
+                  <label className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl cursor-pointer hover:bg-amber-100 transition-colors">
+                    <input type="checkbox" checked={shiftForm.is_bko} onChange={e => setShiftForm({...shiftForm, is_bko: e.target.checked})} className="w-5 h-5 text-amber-600 rounded border-amber-300 focus:ring-amber-500"/>
+                    <div className="flex-1">
+                       <span className="text-xs font-bold text-amber-900 block">Status BKO / Pengganti</span>
+                       <span className="text-[10px] font-medium text-amber-700">Tandai shift ini sebagai bantuan personil (BKO).</span>
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Jam Keluar</label>
-                      <input type="time" value={shiftForm.time_out} onChange={e => setShiftForm({...shiftForm, time_out: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50"/>
-                    </div>
-                  </div>
+                  </label>
+
                   <p className="text-[10px] text-slate-400 italic mt-1">*Kosongkan jam masuk/keluar jika Tipe Shift adalah Libur/Off.</p>
                 </div>
                 <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
@@ -4360,6 +4795,260 @@ export default function ClientAdmin() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL INPUT CASHFLOW */}
+        {isCashflowModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex justify-center items-center p-4">
+            <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
+              <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-black text-lg text-slate-800">Form Arus Kas</h3>
+                <button type="button" onClick={() => setIsCashflowModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
+              </div>
+              <form onSubmit={handleSaveCashflow} className="p-6 space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Tipe</label>
+                    <select value={cashflowForm.type} onChange={e => setCashflowForm({...cashflowForm, type: e.target.value})} className={`w-full p-3 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none ${cashflowForm.type === 'INCOME' ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50'}`}>
+                      <option value="INCOME">Pemasukan [+]</option><option value="EXPENSE">Pengeluaran [-]</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Tanggal</label>
+                    <input required type="date" value={cashflowForm.date} onChange={e => setCashflowForm({...cashflowForm, date: e.target.value})} className="w-full p-3 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500 bg-slate-50"/>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Kategori Jurnal</label>
+                  <input required type="text" placeholder="Cth: Biaya Listrik / Retensi Klien" value={cashflowForm.category} onChange={e => setCashflowForm({...cashflowForm, category: e.target.value})} className="w-full p-3 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500 bg-slate-50"/>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Nominal (Rp)</label>
+                  <input required type="number" min="0" value={cashflowForm.amount} onChange={e => setCashflowForm({...cashflowForm, amount: e.target.value})} className="w-full p-3 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500 bg-slate-50"/>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Keterangan / Notes</label>
+                  <textarea rows="2" value={cashflowForm.description} onChange={e => setCashflowForm({...cashflowForm, description: e.target.value})} className="w-full p-3 border-2 border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-blue-500 bg-slate-50 resize-none"></textarea>
+                </div>
+                <button type="submit" className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-md transition-all">Simpan Transaksi</button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL INPUT INVOICE */}
+        {isInvoiceModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex justify-center items-center p-4">
+            <div className="bg-slate-50 w-full max-w-4xl max-h-[90vh] rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
+              <div className="px-6 py-5 border-b border-slate-200 flex justify-between items-center bg-white shrink-0">
+                <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><Receipt size={20} className="text-blue-600"/> Pembuatan Tagihan (Invoice)</h3>
+                <button type="button" onClick={() => setIsInvoiceModalOpen(false)} className="p-2 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200"><X size={16}/></button>
+              </div>
+              <form onSubmit={handleSaveInvoice} className="flex flex-col flex-1 overflow-hidden">
+                <div className="p-6 md:p-8 overflow-y-auto space-y-6 flex-1 custom-scrollbar">
+                  
+                  {/* Data Klien & Tanggal */}
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-3">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Tujuan / Nama Klien</label>
+                      <input required type="text" placeholder="PT Contoh Perusahaan Tbk." value={invoiceForm.client_name} onChange={e => setInvoiceForm({...invoiceForm, client_name: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg text-sm font-bold bg-slate-50 outline-none focus:border-blue-500"/>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Nomor Dokumen</label>
+                      <input required type="text" value={invoiceForm.invoice_number} onChange={e => setInvoiceForm({...invoiceForm, invoice_number: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg text-sm font-bold bg-slate-50 outline-none focus:border-blue-500"/>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Tanggal Terbit</label>
+                      <input required type="date" value={invoiceForm.date} onChange={e => setInvoiceForm({...invoiceForm, date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg text-sm font-bold bg-slate-50 outline-none focus:border-blue-500"/>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Jatuh Tempo</label>
+                      <input required type="date" value={invoiceForm.due_date} onChange={e => setInvoiceForm({...invoiceForm, due_date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg text-sm font-bold bg-slate-50 outline-none focus:border-blue-500"/>
+                    </div>
+                  </div>
+
+                  {/* Rincian Item Tagihan */}
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                      <h4 className="text-xs font-black text-slate-700 uppercase">Rincian Item Jasa/Produk</h4>
+                      <button type="button" onClick={handleAddInvoiceItem} className="text-[10px] bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-100 flex items-center gap-1"><Plus size={12}/> Item Baru</button>
+                    </div>
+                    {invoiceForm.items.map((item, index) => (
+                      <div key={index} className="flex flex-col md:flex-row gap-3 items-end animate-in fade-in pb-3 border-b border-slate-50 last:border-0">
+                        <div className="flex-1 w-full"><input required type="text" placeholder="Deskripsi Jasa / Barang" value={item.desc} onChange={e => handleUpdateInvoiceItem(index, 'desc', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-xs outline-none focus:border-blue-500"/></div>
+                        <div className="w-full md:w-24"><input required type="number" min="1" placeholder="Qty" value={item.qty} onChange={e => handleUpdateInvoiceItem(index, 'qty', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-xs text-center outline-none focus:border-blue-500"/></div>
+                        <div className="w-full md:w-40"><input required type="number" min="0" placeholder="Harga Satuan" value={item.price} onChange={e => handleUpdateInvoiceItem(index, 'price', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-xs outline-none focus:border-blue-500"/></div>
+                        <div className="w-full md:w-auto mt-2 md:mt-0"><button type="button" onClick={() => handleRemoveInvoiceItem(index)} className="p-2.5 bg-rose-50 text-rose-500 rounded-lg hover:bg-rose-100 w-full md:w-auto flex justify-center"><X size={14}/></button></div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Pajak, Diskon & Catatan Tambahan */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div><textarea placeholder="Syarat & Ketentuan / Catatan Bank..." value={invoiceForm.notes} onChange={e => setInvoiceForm({...invoiceForm, notes: e.target.value})} className="w-full h-full min-h-[100px] p-4 bg-white border border-slate-200 rounded-2xl text-xs font-medium outline-none focus:border-blue-500 resize-none"></textarea></div>
+                    <div className="bg-slate-100 p-5 rounded-2xl border border-slate-200 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-slate-500">Tarif Pajak PPN (%)</span>
+                        <input type="number" value={invoiceForm.tax_rate} onChange={e => setInvoiceForm({...invoiceForm, tax_rate: e.target.value})} className="w-20 p-2 border border-slate-200 rounded-lg text-xs text-right outline-none font-bold"/>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-slate-500">Potongan Diskon (Rp)</span>
+                        <input type="number" value={invoiceForm.discount} onChange={e => setInvoiceForm({...invoiceForm, discount: e.target.value})} className="w-32 p-2 border border-slate-200 rounded-lg text-xs text-right outline-none font-bold"/>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+                <div className="p-5 border-t border-slate-200 bg-white flex justify-end gap-3 shrink-0">
+                  <button type="button" onClick={() => setIsInvoiceModalOpen(false)} className="px-5 py-3 text-slate-600 hover:bg-slate-100 rounded-xl font-bold text-sm transition-colors">Batal</button>
+                  <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-md transition-all">Terbitkan Invoice</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================== */}
+        {/* MODAL SLIP GAJI (POP-UP) */}
+        {/* ========================================== */}
+        {selectedPayslip && (
+          <div className="fixed inset-0 z-[99] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-300">
+            <div className="bg-[#f8fafc] w-full max-w-2xl rounded-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+              
+              {/* HEADER MODAL & TOMBOL CLOSE */}
+              <div className="flex justify-between items-center p-5 border-b border-slate-200 bg-white">
+                <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                  <Receipt size={20} className="text-blue-600"/> Rincian Slip Gaji
+                </h3>
+                <button onClick={() => setSelectedPayslip(null)} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors">
+                  <X size={20}/>
+                </button>
+              </div>
+
+              {/* KONTEN KERTAS PAYSLIP (BISA DI-SCROLL) */}
+              <div className="flex-1 overflow-y-auto p-8 bg-slate-100 custom-scrollbar">
+                <div className="max-w-xl mx-auto shadow-[0_10px_40px_rgba(0,0,0,0.1)]">
+                  
+                  {/* --- AREA YANG AKAN DI-PRINT PDF (HEX COLOR FIX) --- */}
+                  <div id={`payslip-${selectedPayslip.id}`} className="border border-[#cbd5e1] p-8 rounded-xl bg-[#ffffff] text-[#0f172a] relative">
+                     
+                     {/* HEADER SURAT */}
+                     <div className="flex justify-between items-start border-b-2 border-[#1e293b] pb-4 mb-5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-[#1e293b] text-[#ffffff] rounded-lg flex items-center justify-center font-black text-sm">
+                            {appConfig.short}
+                          </div>
+                          <div>
+                            <h2 className="text-base font-black text-[#0f172a] uppercase tracking-widest leading-tight">{appConfig.name}</h2>
+                            <p className="text-[10px] text-[#475569] font-medium mt-0.5">Slip Gaji Karyawan</p>
+                          </div>
+                        </div>
+                     </div>
+
+                     {/* INFO KARYAWAN */}
+                     <table className="w-full text-xs mb-6 border-collapse border border-[#1e293b]">
+                        <tbody>
+                           <tr>
+                              <td className="bg-[#f1f5f9] font-bold p-2.5 w-1/3 border border-[#1e293b]">Nama Lengkap</td>
+                              <td className="p-2.5 border border-[#1e293b] font-bold">{selectedPayslip.employee?.nama_lengkap}</td>
+                           </tr>
+                           <tr>
+                              <td className="bg-[#f1f5f9] font-bold p-2.5 border border-[#1e293b]">NIK / Divisi</td>
+                              <td className="p-2.5 border border-[#1e293b]">{selectedPayslip.employee?.nik_karyawan} / {selectedPayslip.employee?.bidang_jasa}</td>
+                           </tr>
+                           <tr>
+                              <td className="bg-[#f1f5f9] font-bold p-2.5 border border-[#1e293b]">Periode Gaji</td>
+                              <td className="p-2.5 border border-[#1e293b] font-black">{selectedPayslip.period}</td>
+                           </tr>
+                           <tr>
+                              <td className="bg-[#f1f5f9] font-bold p-2.5 border border-[#1e293b]">Kehadiran</td>
+                              <td className="p-2.5 border border-[#1e293b]">{selectedPayslip.total_work_days} Hari Masuk</td>
+                           </tr>
+                        </tbody>
+                     </table>
+
+                     {/* PENGHASILAN (EARNINGS) */}
+                     <table className="w-full text-xs mb-5 border-collapse border border-[#1e293b]">
+                        <thead className="bg-[#1e293b] text-[#ffffff]">
+                           <tr>
+                              <th className="p-2.5 text-left border-r border-[#334155]">PENGHASILAN</th>
+                              <th className="p-2.5 text-right">NOMINAL</th>
+                           </tr>
+                        </thead>
+                        <tbody>
+                           <tr>
+                              <td className="p-2.5 border border-[#1e293b] font-semibold">Gaji Pokok</td>
+                              <td className="p-2.5 border border-[#1e293b] text-right">{formatRupiah(selectedPayslip.basic_salary)}</td>
+                           </tr>
+                           {(selectedPayslip.additions || []).map((add, i) => (
+                           <tr key={i}>
+                              <td className="p-2.5 border border-[#1e293b] font-semibold">{add.name}</td>
+                              <td className="p-2.5 border border-[#1e293b] text-right">{formatRupiah(add.amount)}</td>
+                           </tr>
+                           ))}
+                           <tr className="bg-[#f1f5f9]">
+                              <td className="p-2.5 border border-[#1e293b] text-right font-black">Total Kotor</td>
+                              <td className="p-2.5 border border-[#1e293b] text-right font-black">{formatRupiah(selectedPayslip.gross_salary)}</td>
+                           </tr>
+                        </tbody>
+                     </table>
+
+                     {/* POTONGAN (DEDUCTIONS) */}
+                     <table className="w-full text-xs mb-6 border-collapse border border-[#1e293b]">
+                        <thead className="bg-[#1e293b] text-[#ffffff]">
+                           <tr>
+                              <th className="p-2.5 text-left border-r border-[#334155]">POTONGAN</th>
+                              <th className="p-2.5 text-right">NOMINAL</th>
+                           </tr>
+                        </thead>
+                        <tbody>
+                           <tr>
+                              <td className="p-2.5 border border-[#1e293b] font-semibold">PPh 21</td>
+                              <td className="p-2.5 border border-[#1e293b] text-right">{formatRupiah(selectedPayslip.tax_pph21)}</td>
+                           </tr>
+                           {(selectedPayslip.deductions || []).map((ded, i) => (
+                           <tr key={i}>
+                              <td className="p-2.5 border border-[#1e293b] font-semibold">{ded.name}</td>
+                              <td className="p-2.5 border border-[#1e293b] text-right">{formatRupiah(ded.amount)}</td>
+                           </tr>
+                           ))}
+                        </tbody>
+                     </table>
+
+                     {/* TAKE HOME PAY */}
+                     <table className="w-full border-collapse border border-[#0f172a] mb-6">
+                        <tbody>
+                           <tr className="bg-[#0f172a] text-[#ffffff] font-black">
+                              <td className="p-4 text-left text-sm">TAKE HOME PAY</td>
+                              <td className="p-4 text-right text-lg">{formatRupiah(selectedPayslip.net_salary)}</td>
+                           </tr>
+                        </tbody>
+                     </table>
+                     
+                     <p className="text-[9px] text-[#64748b] italic text-center">
+                        Dokumen ini sah dan diterbitkan otomatis oleh sistem pada {new Date().toLocaleDateString('id-ID')}.
+                     </p>
+                  </div>
+                  {/* --- AKHIR AREA PRINT PDF --- */}
+                  
+                </div>
+              </div>
+
+              {/* FOOTER MODAL & TOMBOL DOWNLOAD */}
+              <div className="p-5 border-t border-slate-200 bg-white flex justify-end gap-4">
+                 <button onClick={() => setSelectedPayslip(null)} className="px-6 py-3 text-slate-500 hover:bg-slate-100 rounded-xl font-bold text-sm transition-colors">
+                   Tutup
+                 </button>
+                 <button 
+                   onClick={() => handleDownloadPDF(`payslip-${selectedPayslip.id}`, `Payslip_${selectedPayslip.employee?.nama_lengkap}_${selectedPayslip.period}.pdf`)} 
+                   className="px-6 py-3 bg-[#0a195c] hover:bg-blue-900 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-900/30 flex items-center gap-2 transition-all active:scale-95"
+                 >
+                   <Download size={18}/> Download PDF
+                 </button>
+              </div>
+
             </div>
           </div>
         )}
