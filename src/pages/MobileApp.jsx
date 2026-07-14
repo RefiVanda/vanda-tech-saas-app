@@ -1779,7 +1779,7 @@ export default function MobileApp() {
           </div>
         </div>
 
-        {/* ========================================== */}
+          {/* ========================================== */}
           {/* === VIEW 5: SLIP GAJI === */}
           {/* ========================================== */}
           <div className={`absolute inset-0 bg-[#F4F7FB] flex flex-col transition-transform duration-300 ease-in-out z-30 ${activeMenu === 'slip' ? 'translate-x-0' : 'translate-x-full'}`}>
@@ -1954,22 +1954,53 @@ export default function MobileApp() {
           {/* ========================================== */}
           {/* === BOTTOM NAVIGATION BAR (FIXED) === */}
           {/* ========================================== */}
-          <div className="absolute bottom-0 w-full bg-white border-t border-slate-200 flex justify-around items-center py-3 px-2 z-50 rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.03)] pb-5">
-            <button onClick={() => setActiveMenu('home')} className={`flex flex-col items-center p-2 transition-colors ${activeMenu === 'home' ? 'text-[#0a195c]' : 'text-slate-400'}`}>
-              <Home size={24} className={activeMenu === 'home' ? 'drop-shadow-md' : ''}/>
-              <span className="text-[10px] font-bold mt-1">Beranda</span>
-            </button>
-            
-            <div className="relative -top-6">
-              <button onClick={() => setActiveMenu('absen')} className="bg-[#0a195c] text-white p-4 rounded-full shadow-lg shadow-blue-900/30 flex items-center justify-center border-4 border-[#F4F7FB] active:scale-95 transition-transform">
-                <Camera size={28} />
-              </button>
-            </div>
+          <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[447px] z-50">
+  
+            {/* Container utama Navbar putih */}
+            <div className="bg-white h-[76px] rounded-t-[2rem] shadow-[0_-8px_30px_rgba(0,0,0,0.08)] flex justify-between items-center px-6 relative">
+              
+              {/* 1. KIRI: Tombol Home */}
+              <div className="flex w-1/3 justify-center h-full">
+                <button 
+                  onClick={() => setActiveMenu('home')} 
+                  className={`relative flex flex-col items-center justify-center w-full h-full transition-all duration-300 ${activeMenu === 'home' ? 'text-blue-600' : 'text-slate-400 hover:text-blue-500'}`}
+                >
+                  <Home size={28} strokeWidth={activeMenu === 'home' ? 2.5 : 2} className={`transition-all duration-300 ${activeMenu === 'home' ? '-translate-y-1' : ''}`} />
+                  
+                  {/* Garis Penanda Aktif (Dengan animasi naik dari bawah) */}
+                  <span className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-blue-600 rounded-t-md transition-all duration-300 ${activeMenu === 'home' ? 'opacity-100' : 'opacity-0 translate-y-2'}`}></span>
+                </button>
+              </div>
 
-            <button onClick={() => setActiveMenu('settings')} className={`flex flex-col items-center p-2 transition-colors ${activeMenu === 'settings' ? 'text-[#0a195c]' : 'text-slate-400'}`}>
-              <Settings size={24} className={activeMenu === 'settings' ? 'drop-shadow-md' : ''}/>
-              <span className="text-[10px] font-bold mt-1">Profil</span>
-            </button>
+              {/* 2. TENGAH: Tombol Absen (Floating Curved Cutout) */}
+              <div className="absolute left-1/2 -translate-x-1/2 -top-8">
+                {/* WRAPPER LENGKUNGAN: p-2 dan bg-slate-50 inilah yang membuat ilusi lengkungan mulus */}
+                {/* Pastikan bg-slate-50 sama persis dengan warna background dasar aplikasi kamu! */}
+                <div className="bg-slate-50 p-2 rounded-full">
+                  <button 
+                    onClick={() => setActiveMenu('absen')} 
+                    className="flex items-center justify-center w-[64px] h-[64px] rounded-full bg-blue-600 text-white shadow-[0_10px_25px_rgba(37,99,235,0.5)] transition-transform active:scale-95"
+                  >
+                    <Camera size={32} strokeWidth={2.5} />
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. KANAN: Tombol Profile / Settings */}
+              <div className="flex w-1/3 justify-center h-full">
+                <button 
+                  // FIX: onClick dan pengecekan state sudah disamakan menjadi 'settings'
+                  onClick={() => setActiveMenu('settings')} 
+                  className={`relative flex flex-col items-center justify-center w-full h-full transition-all duration-300 ${activeMenu === 'settings' ? 'text-blue-600' : 'text-slate-400 hover:text-blue-500'}`}
+                >
+                  <User size={28} strokeWidth={activeMenu === 'settings' ? 2.5 : 2} className={`transition-all duration-300 ${activeMenu === 'settings' ? '-translate-y-1' : ''}`} />
+                  
+                  {/* Garis Penanda Aktif */}
+                  <span className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-blue-600 rounded-t-md transition-all duration-300 ${activeMenu === 'settings' ? 'opacity-100' : 'opacity-0 translate-y-2'}`}></span>
+                </button>
+              </div>
+
+            </div>
           </div>
         
         {/* ========================================== */}
