@@ -6,7 +6,7 @@ import {
   Clock, ShieldAlert, CreditCard, 
   Calendar, Settings, Lock, Image as ImageIcon, Bell, ArrowRight,
   CheckCircle2, LogOut, LogIn, History, Check, ChevronLeft, ChevronRight, Upload, X, RefreshCw, Plus,
-  FolderOpen, CalendarMinus, FileWarning, UserX, Trash2
+  FolderOpen, CalendarMinus, FileWarning, UserX, Trash2, Check
 } from 'lucide-react';
 
 export default function MobileApp() {
@@ -48,6 +48,18 @@ export default function MobileApp() {
     light: "bg-blue-50"
   };
   const [activeMenu, setActiveMenu] = useState('home');
+
+  // --- TAMBAHAN: State Remember Me ---
+  const [rememberMe, setRememberMe] = useState(false);
+
+  // --- TAMBAHAN: Cek memori perangkat saat pertama kali halaman dimuat ---
+  useEffect(() => {
+    const savedNik = localStorage.getItem('vest_saved_nik');
+    if (savedNik) {
+      setNik(savedNik);
+      setRememberMe(true);
+    }
+  }, []);
   
   // FUNGSI CEK HAK AKSES MENU MOBILE (SMART DETECTOR)
   const hasMobileMenu = (menuName) => {

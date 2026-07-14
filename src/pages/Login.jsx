@@ -108,8 +108,14 @@ export default function Login() {
           hasMobileAccess: Boolean(data.has_mobile_access),
           hasTaskAccess: Boolean(data.has_task_access)
         };
-        localStorage.setItem('vest_user_session', JSON.stringify(userSession));
+        localStorage.setItem('vest_user_session', JSON.stringify(userSession));localStorage.setItem('vest_user_session', JSON.stringify(userSession));
         
+        if (rememberMe) {
+          localStorage.setItem('vest_saved_nik', nik);
+        } else {
+          localStorage.removeItem('vest_saved_nik');
+        }
+
         const isExplicitMobile = window.location.pathname.includes('/mobile') || window.location.search.includes('mobile');
 
         if (isExplicitMobile) {
@@ -277,12 +283,23 @@ export default function Login() {
                   {successMsg && <div className="bg-emerald-50 text-emerald-600 p-3 rounded-xl text-sm font-bold border border-emerald-100 text-center">{successMsg}</div>}
 
                   <div className="pt-2 space-y-6">
-                    <div className="flex justify-end">
-                      <button type="button" onClick={() => {setViewMode('forgot'); setErrorMsg(''); setSuccessMsg('');}} className="text-sm font-semibold text-blue-600 hover:text-blue-700">Lupa kata sandi?</button>
-                    </div>
-                    <button type="submit" disabled={isLoading} className={`w-full flex justify-center items-center gap-2 ${clientData.brandColor} ${clientData.buttonHover} text-white font-bold py-3.5 rounded-2xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98] ${isLoading ? 'opacity-70 cursor-not-allowed' : ''}`}>
-                      {isLoading ? 'Memverifikasi Data...' : <>Masuk <LogIn size={18} /></>}
-                    </button>
+                  {/* PERUBAHAN: Tata letak sejajar (Ingat Saya di Kiri, Lupa Sandi di Kanan) */}
+                  <div className="flex justify-between items-center">
+                    <label className="flex items-center gap-2 cursor-pointer group">
+                      <div className="relative flex items-center justify-center">
+                        <input 
+                          type="checkbox" 
+                          checked={rememberMe} 
+                          onChange={(e) => setRememberMe(e.target.checked)} 
+                          className="peer appearance-none w-5 h-5 border-2 border-slate-300 rounded-md checked:bg-blue-600 checked:border-blue-600 transition-all cursor-pointer" 
+                        />
+                        <Check size={14} className="text-white absolute opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none" strokeWidth={3} />
+                      </div>
+                      <span className="text-sm font-medium text-slate-600 group-hover:text-slate-800 transition-colors">Ingat NIK</span>
+                    </label>
+                    
+                    <button type="button" onClick={() => {setViewMode('forgot'); setErrorMsg(''); setSuccessMsg('');}} className="text-sm font-semibold text-blue-600 hover:text-blue-700">Lupa sandi?</button>
+                  </div>
                   </div>
                 </form>
               </div>
