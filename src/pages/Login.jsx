@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase'; 
-import { Building2, KeyRound, Eye, EyeOff, IdCard, LogIn, ShieldQuestion, CheckCircle2, ArrowLeft } from 'lucide-react';
+import { Building2, KeyRound, Eye, EyeOff, IdCard, LogIn, ShieldQuestion, CheckCircle2, ArrowLeft, Check } from 'lucide-react';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -19,6 +19,15 @@ export default function Login() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+
+  useEffect(() => {
+    const savedNik = localStorage.getItem('vest_saved_nik');
+    if (savedNik) {
+      setNik(savedNik);
+      setRememberMe(true);
+    }
+  }, []);
 
   const clientData = {
     companyName: "PT Klien Nusantara",
@@ -283,23 +292,28 @@ export default function Login() {
                   {successMsg && <div className="bg-emerald-50 text-emerald-600 p-3 rounded-xl text-sm font-bold border border-emerald-100 text-center">{successMsg}</div>}
 
                   <div className="pt-2 space-y-6">
-                  {/* PERUBAHAN: Tata letak sejajar (Ingat Saya di Kiri, Lupa Sandi di Kanan) */}
-                  <div className="flex justify-between items-center">
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative flex items-center justify-center">
-                        <input 
-                          type="checkbox" 
-                          checked={rememberMe} 
-                          onChange={(e) => setRememberMe(e.target.checked)} 
-                          className="peer appearance-none w-5 h-5 border-2 border-slate-300 rounded-md checked:bg-blue-600 checked:border-blue-600 transition-all cursor-pointer" 
-                        />
-                        <Check size={14} className="text-white absolute opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none" strokeWidth={3} />
+                      {/* Tata letak sejajar (Ingat Saya di Kiri, Lupa Sandi di Kanan) */}
+                      <div className="flex justify-between items-center">
+                        <label className="flex items-center gap-2 cursor-pointer group">
+                          <div className="relative flex items-center justify-center">
+                            <input 
+                              type="checkbox" 
+                              checked={rememberMe} 
+                              onChange={(e) => setRememberMe(e.target.checked)} 
+                              className="peer appearance-none w-5 h-5 border-2 border-slate-300 rounded-md checked:bg-blue-600 checked:border-blue-600 transition-all cursor-pointer" 
+                            />
+                            <Check size={14} className="text-white absolute opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none" strokeWidth={3} />
+                          </div>
+                          <span className="text-sm font-medium text-slate-600 group-hover:text-slate-800 transition-colors">Remember Me</span>
+                        </label>
+                        
+                        <button type="button" onClick={() => {setViewMode('forgot'); setErrorMsg(''); setSuccessMsg('');}} className="text-sm font-semibold text-blue-600 hover:text-blue-700">Lupa sandi?</button>
                       </div>
-                      <span className="text-sm font-medium text-slate-600 group-hover:text-slate-800 transition-colors">Ingat NIK</span>
-                    </label>
-                    
-                    <button type="button" onClick={() => {setViewMode('forgot'); setErrorMsg(''); setSuccessMsg('');}} className="text-sm font-semibold text-blue-600 hover:text-blue-700">Lupa sandi?</button>
-                  </div>
+
+                      {/* INI TOMBOL MASUK YANG KEMARIN TERHAPUS */}
+                      <button type="submit" disabled={isLoading} className={`w-full flex justify-center items-center gap-2 ${clientData.brandColor} ${clientData.buttonHover} text-white font-bold py-3.5 rounded-2xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98] ${isLoading ? 'opacity-70 cursor-not-allowed' : ''}`}>
+                        {isLoading ? 'Memverifikasi Data...' : <>Masuk <LogIn size={18} /></>}
+                      </button>
                   </div>
                 </form>
               </div>

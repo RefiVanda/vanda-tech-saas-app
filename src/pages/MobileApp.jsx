@@ -6,7 +6,7 @@ import {
   Clock, ShieldAlert, CreditCard, 
   Calendar, Settings, Lock, Image as ImageIcon, Bell, ArrowRight,
   CheckCircle2, LogOut, LogIn, History, Check, ChevronLeft, ChevronRight, Upload, X, RefreshCw, Plus,
-  FolderOpen, CalendarMinus, FileWarning, UserX, Trash2, Check
+  FolderOpen, CalendarMinus, FileWarning, UserX, Trash2
 } from 'lucide-react';
 
 export default function MobileApp() {
