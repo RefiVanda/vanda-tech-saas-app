@@ -26,7 +26,8 @@ const defaultRolePermissions = {
   finance: { view: false, create: false, edit: false, delete: false, export: false },
   settings: { view: false, edit: false },
   broadcast: { view: false, create: false, delete: false },
-  mobile: { absen: true, laporan: true, pengajuan: true, task: false, slip: true }
+  mobile: { absen: true, laporan: true, pengajuan: true, task: false, slip: true },
+  form_builder: { view: false, create: false, edit: false, delete: false }
 };
 
 const menuModules = [
@@ -38,6 +39,7 @@ const menuModules = [
   { id: 'approval', label: 'Pusat Approval', actions: ['view', 'approve'] },
   { id: 'laporan', label: 'Laporan & Arsip', actions: ['view', 'export'] },
   { id: 'finance', label: 'Finance & Reimburse', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'form_builder', label: 'Form Builder Laporan', actions: ['view', 'create', 'edit', 'delete'] },
   { id: 'settings', label: 'Pengaturan Sistem', actions: ['view', 'edit'] }
 ];
 
@@ -336,6 +338,10 @@ export default function ClientAdmin() {
   const [filterReportDate, setFilterReportDate] = useState('');
   const [filterReportType, setFilterReportType] = useState('Semua');
 
+  const [filterCustomName, setFilterCustomName] = useState('');
+  const [filterCustomDate, setFilterCustomDate] = useState('');
+  const [filterCustomMenu, setFilterCustomMenu] = useState('Semua');
+
   // 1. UPDATE useEffect (Penarikan Data Lebih Cepat)
   useEffect(() => {
     const session = localStorage.getItem('vest_user_session');
@@ -369,10 +375,10 @@ export default function ClientAdmin() {
       const isValidUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId);
       
       if (isValidUUID) {
-        const { data } = await supabase.from('employees').select('id, client_id, role, clients(name, status, features)').eq('id', targetId).single();
+        const { data } = await supabase.from('employees').select('id, client_id, role, clients(name, status, features, logo_url)').eq('id', targetId).single();
         myProfile = data;
       } else {
-        const { data } = await supabase.from('employees').select('id, client_id, role, clients(name, status, features)').eq('nik_karyawan', targetId).single();
+        const { data } = await supabase.from('employees').select('id, client_id, role, clients(name, status, features, logo_url)').eq('nik_karyawan', targetId).single();
         myProfile = data;
       }
 
@@ -407,7 +413,8 @@ export default function ClientAdmin() {
         setAppConfig(prev => ({
           ...prev,
           name: companyName,
-          short: shortName
+          short: shortName,
+          logo_url: myProfile.clients.logo_url || null // <-- BARIS INI MENYELAMATKAN LOGO SAAT REFRESH
         }));
       }
 
@@ -422,9 +429,9 @@ export default function ClientAdmin() {
 
       const fetchUserData = async (userId, parsedSession) => {
       try {
-        // PERBAIKAN: Tambahkan 'name' ke dalam select relasi clients
+        // PERBAIKAN: Tambahkan 'logo_url' ke dalam select relasi clients
         const { data, error } = await supabase.from('employees')
-          .select('client_id, nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti, lokasi_penempatan, clients(name, status)')
+          .select('client_id, nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti, lokasi_penempatan, clients(name, status, logo_url)')
           .eq('nik_karyawan', parsedSession.nik).single(); 
 
         if (error) throw error;
@@ -470,7 +477,8 @@ export default function ClientAdmin() {
             setAppConfig(prev => ({
               ...prev,
               name: companyName,
-              short: shortName
+              short: shortName,
+              logo_url: data.clients.logo_url || null
             }));
           }
           
@@ -521,6 +529,9 @@ export default function ClientAdmin() {
       const { data: roleData } = await buildQuery('company_roles').order('name', { ascending: true });
       if (roleData) setCompanyRoles(roleData);
 
+      const { data: cmData } = await buildQuery('custom_menus').order('created_at', { ascending: false });
+      if (cmData) setCustomMenus(cmData);
+
       // PERBAIKAN 1: Isolasi Nama Klien agar tidak bocor ke klien/perusahaan lain
       let qClients = supabase.from('clients').select('*').order('name', { ascending: true });
       if (!isSuper && myClientId) qClients = qClients.eq('id', myClientId);
@@ -539,6 +550,60 @@ export default function ClientAdmin() {
 
     } catch (error) {
       console.error("Gagal menarik data:", error);
+    }
+  };
+
+ const [customMenus, setCustomMenus] = useState([]);
+  
+  // 👇 TAMBAHKAN KODE INI 👇
+  const [isBuilderOpen, setIsBuilderOpen] = useState(false);
+  const [draggedItemIndex, setDraggedItemIndex] = useState(null);
+  const [builderForm, setBuilderForm] = useState({ 
+    id: null, menu_name: '', icon_name: 'FileText', fields: [] 
+  });
+
+  const handleAddBuilderField = (type) => {
+    const newField = { 
+      id: Date.now().toString(), 
+      type: type, 
+      label: type === 'camera' ? 'Foto Dokumentasi' : 'Pertanyaan Baru',
+      options: '' 
+    };
+    setBuilderForm(prev => ({ ...prev, fields: [...prev.fields, newField] }));
+  };
+
+  const handleDragStart = (index) => setDraggedItemIndex(index);
+  const handleDragOver = (e) => e.preventDefault();
+  const handleDrop = (index) => {
+    if (draggedItemIndex === null) return;
+    const newFields = [...builderForm.fields];
+    const draggedItem = newFields[draggedItemIndex];
+    newFields.splice(draggedItemIndex, 1);
+    newFields.splice(index, 0, draggedItem);
+    setBuilderForm({...builderForm, fields: newFields});
+    setDraggedItemIndex(null);
+  };
+
+  const handleSaveCustomMenu = async (e) => {
+    e.preventDefault();
+    if(!builderForm.menu_name || builderForm.fields.length === 0) {
+       return alert("Nama menu dan minimal 1 komponen wajib diisi!");
+    }
+    const payload = {
+      client_id: currentUser.client_id,
+      menu_name: builderForm.menu_name,
+      icon_name: builderForm.icon_name,
+      fields: builderForm.fields
+    };
+
+    const { error } = await supabase.from('custom_menus').insert([payload]);
+    if (!error) {
+      alert("Menu Custom Berhasil Dibuat!");
+      setIsBuilderOpen(false);
+      setBuilderForm({ id: null, menu_name: '', icon_name: 'FileText', fields: [] });
+      fetchAllData(); // Refresh data setelah simpan
+    } else {
+      alert("Error: " + error.message);
     }
   };
 
@@ -1072,6 +1137,95 @@ export default function ClientAdmin() {
     }
   };
 
+  // EXPORT LAPORAN CUSTOM (DINAMIS)
+  const exportCustomLaporanExcel = async () => {
+    const filteredReports = fieldReports.filter(r => {
+      const isCustom = r.report_type !== 'patroli' && r.report_type !== 'reguler';
+      const matchName = (r.employees?.nama_lengkap || '').toLowerCase().includes(filterCustomName.toLowerCase());
+      const matchDate = filterCustomDate === '' || (r.created_at || '').startsWith(filterCustomDate);
+      const matchMenu = filterCustomMenu === 'Semua' || r.report_type === filterCustomMenu;
+      return isCustom && matchName && matchDate && matchMenu;
+    });
+
+    if (filteredReports.length === 0) return alert("Tidak ada data laporan custom untuk diekspor.");
+
+    setIsExporting(true);
+
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Laporan Custom');
+
+      worksheet.columns = [
+        { header: 'Waktu Laporan', key: 'time', width: 20 },
+        { header: 'Nama Pelapor', key: 'name', width: 25 },
+        { header: 'Menu Custom', key: 'type', width: 25 },
+        { header: 'Lokasi (Geo-Fence)', key: 'locName', width: 30 },
+        { header: 'Koordinat', key: 'coord', width: 25 },
+        { header: 'Judul Laporan', key: 'title', width: 30 },
+        { header: 'Isi Data Form', key: 'notes', width: 60 },
+        { header: 'Foto 1', key: 'photo1', width: 15 },
+        { header: 'Foto 2', key: 'photo2', width: 15 }
+      ];
+
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+      for (let i = 0; i < filteredReports.length; i++) {
+         const r = filteredReports[i];
+         let notesText = r.description;
+         let photosArr = [];
+         
+         if (r.photo_url) photosArr.push(r.photo_url);
+
+         try {
+           const parsed = JSON.parse(r.description);
+           if (parsed.notes) notesText = parsed.notes;
+           if (parsed.photos && Array.isArray(parsed.photos)) photosArr = parsed.photos.map(p => p.url);
+         } catch (e) {}
+
+         const locName = r.location_name || r.location_gps || 'Luar Area / Bebas'; 
+         const coord = (r.latitude && r.longitude) ? `${r.latitude}, ${r.longitude}` : 'Tidak Tercatat';
+
+         const row = worksheet.addRow({
+           time: new Date(r.created_at).toLocaleString('id-ID'),
+           name: r.employees?.nama_lengkap || 'Unknown',
+           type: r.report_type.toUpperCase(),
+           locName: locName,
+           coord: coord,
+           title: r.title,
+           notes: notesText
+         });
+
+         row.height = 80; 
+         row.alignment = { vertical: 'middle', wrapText: true };
+
+         for(let p = 0; p < Math.min(photosArr.length, 2); p++) {
+           const imgUrl = photosArr[p];
+           if(imgUrl) {
+             const base64Img = await getCompressedBase64Image(imgUrl);
+             if(base64Img) {
+               const imageId = workbook.addImage({ base64: base64Img, extension: 'jpeg' });
+               worksheet.addImage(imageId, {
+                  tl: { col: 6 + p, row: row.number - 1 },
+                  ext: { width: 70, height: 70 },
+                  editAs: 'oneCell'
+               });
+             }
+           }
+         }
+      }
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      saveAs(blob, `Laporan_Custom_${filterCustomMenu === 'Semua' ? 'All' : filterCustomMenu}_${new Date().getTime()}.xlsx`);
+      
+    } catch (err) {
+      alert("Terjadi kesalahan saat mengekspor laporan: " + err.message);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   // 3. EXPORT CUTI & IZIN
   const exportCutiExcel = () => {
     const filtered = leaveRequests.filter(r => {
@@ -1393,15 +1547,29 @@ export default function ClientAdmin() {
       if (successData.length > 0) {
         await supabase.from('payrolls').delete().eq('client_id', currentUser.client_id).eq('period', payrollPeriod);
         const { error } = await supabase.from('payrolls').insert(successData);
+        
         if (!error) { 
            const totalNet = successData.reduce((sum, p) => sum + p.net_salary, 0);
-           // PROMPT OTOMATIS KE ARUS KAS (MASSAL)
-           if(window.confirm(`Selesai! ${successData.length} data Gaji berhasil diproses.\nCatat total keseluruhan (Grand Netto) Rp ${totalNet} ke Arus Kas sebagai Pengeluaran?`)) {
-              await supabase.from('cashflows').insert([{
-                 client_id: currentUser.client_id, type: 'EXPENSE', category: 'Pembayaran Gaji Massal',
-                 amount: totalNet, date: new Date().toISOString().split('T')[0],
-                 description: `Gaji massal periode ${payrollPeriod} untuk ${successData.length} karyawan`
-              }]);
+           
+           // 1. Hapus catatan cashflow massal sebelumnya agar tidak dobel
+           const refNumber = `PAY-MASS-${payrollPeriod}`;
+           await supabase.from('cashflows').delete().eq('reference_number', refNumber).eq('client_id', currentUser.client_id);
+           
+           // 2. OTOMATIS CATAT KE ARUS KAS (MASSAL)
+           const { error: cfError } = await supabase.from('cashflows').insert([{
+                 client_id: currentUser.client_id, 
+                 type: 'EXPENSE', 
+                 category: 'Gaji Karyawan (Massal)',
+                 amount: totalNet, 
+                 date: new Date().toISOString().split('T')[0],
+                 description: `Gaji massal periode ${payrollPeriod} untuk ${successData.length} karyawan`,
+                 reference_number: refNumber
+           }]);
+           
+           if (cfError) {
+             alert("Data Payroll tersimpan, tapi gagal mencatat ke Arus Kas: " + cfError.message);
+           } else {
+             alert(`Luar Biasa! ${successData.length} data Gaji diproses & Total Rp ${totalNet} otomatis masuk ke Arus Kas Pengeluaran.`);
            }
            fetchAllData(); 
         } else {
@@ -1466,14 +1634,27 @@ export default function ClientAdmin() {
     const { error } = await supabase.from('payrolls').insert([payload]);
     
     if (!error) { 
-      // PROMPT OTOMATIS KE ARUS KAS (CASHFLOW)
-      if(window.confirm(`Gaji berhasil dihitung! Catat total gaji bersih Rp ${netSalary} ke Arus Kas (Pengeluaran)?`)) {
-         await supabase.from('cashflows').insert([{
-            client_id: currentUser.client_id, type: 'EXPENSE', category: 'Pembayaran Gaji (Payroll)',
-            amount: netSalary, date: new Date().toISOString().split('T')[0],
-            description: `Gaji periode ${payrollPeriod} untuk ${employee.nama_lengkap}`
-         }]);
+      // 1. HAPUS CATATAN ARUS KAS LAMA (Mencegah dobel jika gaji dihitung ulang)
+      const refNumber = `PAY-${employee.nik_karyawan}-${payrollPeriod}`;
+      await supabase.from('cashflows').delete().eq('reference_number', refNumber).eq('client_id', currentUser.client_id);
+      
+      // 2. OTOMATIS CATAT KE ARUS KAS
+      const { error: cfError } = await supabase.from('cashflows').insert([{
+         client_id: currentUser.client_id, 
+         type: 'EXPENSE', 
+         category: 'Gaji Karyawan',
+         amount: netSalary, 
+         date: new Date().toISOString().split('T')[0],
+         description: `Gaji periode ${payrollPeriod} untuk ${employee.nama_lengkap}`,
+         reference_number: refNumber
+      }]);
+
+      if (cfError) {
+         alert("Gaji tersimpan, tapi gagal mencatat ke Arus Kas: " + cfError.message);
+      } else {
+         alert(`Berhasil! Gaji bersih Rp ${netSalary} otomatis masuk ke Arus Kas Pengeluaran.`);
       }
+      
       setIsPayrollModalOpen(false); 
       fetchAllData(); 
     } else {
@@ -1521,6 +1702,40 @@ export default function ClientAdmin() {
     text: "text-blue-600",
     light: "bg-blue-50"
   });
+
+  // STATE LOGO PERUSAHAAN
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const companyLogoRef = useRef(null);
+
+  const handleUploadCompanyLogo = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!window.confirm("Ganti logo perusahaan? Logo ini akan tampil di seluruh aplikasi.")) return;
+    setIsUploadingLogo(true);
+    
+    try {
+      const fileExt = file.name.split('.').pop();
+      const filePath = `${currentUser.client_id}_${Date.now()}.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage.from('company_logos').upload(filePath, file);
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from('company_logos').getPublicUrl(filePath);
+      const publicUrl = data.publicUrl;
+
+      const { error: updateError } = await supabase.from('clients').update({ logo_url: publicUrl }).eq('id', currentUser.client_id);
+      if (updateError) throw updateError;
+
+      setAppConfig(prev => ({ ...prev, logo_url: publicUrl }));
+      alert("Logo Perusahaan Berhasil Diperbarui!");
+    } catch (err) {
+      alert("Gagal mengupload logo: " + err.message);
+    } finally {
+      setIsUploadingLogo(false);
+      if (companyLogoRef.current) companyLogoRef.current.value = '';
+    }
+  };
 
   // --- TAMBAHAN PERBAIKAN: Fungsi Format Rupiah ---
   const formatRupiah = (number) => {
@@ -2213,13 +2428,22 @@ export default function ClientAdmin() {
 
         <div className={`h-24 flex items-center border-b border-slate-100 transition-all ${isSidebarExpanded ? 'px-6' : 'px-0 justify-center'}`}>
           <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 ${appConfig.color} rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-blue-600/20 shrink-0`}>
-              {appConfig.short}
+            <div className={`w-10 h-10 ${appConfig.color} rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-blue-600/20 shrink-0 overflow-hidden`}>
+              {/* Jika ada logo, tampilkan. Jika tidak, tampilkan singkatan nama */}
+              {appConfig.logo_url ? (
+                <img src={appConfig.logo_url} alt="Logo" className="w-full h-full object-cover bg-white" />
+              ) : (
+                appConfig.short
+              )}
             </div>
             {isSidebarExpanded && (
               <div className="overflow-hidden whitespace-nowrap fade-in">
                 <h1 className="font-bold text-slate-800 leading-tight">{appConfig.name}</h1>
-                <p className="text-[10px] text-slate-500 font-medium">Admin Portal</p>
+                <p className="text-[10px] text-slate-500 font-medium flex items-center gap-1.5 mt-0.5">
+                  Admin Portal 
+                  {/* IDENTITAS VANDA TECH DI SAMPING NAMA APLIKASI */}
+                  <span className="text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-black tracking-widest shadow-sm">VANDA TECH</span>
+                </p>
               </div>
             )}
           </div>
@@ -2237,7 +2461,7 @@ export default function ClientAdmin() {
             { id: 'finance', icon: Wallet, label: 'Finance Dashboard' },
             { id: 'broadcast', icon: MessageSquare, label: 'Informasi & Instruksi' }
           ]
-          .filter(item => hasPermission(item.id, 'view')) // PROTEKSI: Sembunyikan menu jika tidak ada hak 'View'
+          .filter(item => hasPermission(item.id, 'view'))
           .map((item) => (
             <button key={item.id} 
               onClick={() => {setActiveMenu(item.id); setSelectedTask(null);}}
@@ -3480,19 +3704,20 @@ export default function ClientAdmin() {
                     <p className="text-slate-500 text-sm mt-1">Pantau seluruh laporan masuk dari Mobile App karyawan lapangan.</p>
                   </div>
                 </div>
-                <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
-                  {[
-                    { id: 'laporan_lapangan', label: 'Laporan Patroli & Reguler' },
-                    { id: 'cuti', label: 'Pengajuan Cuti/Izin' },
-                    { id: 'koreksi', label: 'Perbaikan Absen' },
-                    { id: 'reimburse', label: 'Reimbursement' },
-                  ].map((tab) => (
-                    <button key={tab.id} onClick={() => setLaporanTab(tab.id)}
-                      className={`flex-1 min-w-[150px] py-2.5 px-4 whitespace-nowrap text-sm font-semibold rounded-lg transition-all ${laporanTab === tab.id ? 'bg-white text-blue-600 shadow-sm ring-1 ring-slate-200/50' : 'text-slate-500 hover:text-slate-700'}`}>
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
+                  <div className="flex overflow-x-auto hide-scrollbar p-1.5 bg-slate-200/50 rounded-xl w-full">
+                    {[
+                      { id: 'laporan_lapangan', label: 'Laporan Patroli & Reguler' },
+                      { id: 'laporan_custom', label: 'Laporan Menu Custom' }, // <-- BARIS BARU INI
+                      { id: 'cuti', label: 'Pengajuan Cuti/Izin' },
+                      { id: 'koreksi', label: 'Perbaikan Absen' },
+                      { id: 'reimburse', label: 'Reimbursement' },
+                    ].map((tab) => (
+                      <button key={tab.id} onClick={() => setLaporanTab(tab.id)}
+                        className={`flex-1 min-w-[150px] py-2.5 px-4 whitespace-nowrap text-sm font-semibold rounded-lg transition-all ${laporanTab === tab.id ? 'bg-white text-blue-600 shadow-sm ring-1 ring-slate-200/50' : 'text-slate-500 hover:text-slate-700'}`}>
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
                         
                         {/* ========================================================= */}
@@ -3620,7 +3845,145 @@ export default function ClientAdmin() {
                               })()}
                             </table>
                           </>
-                        )}
+                          )}
+                          {/* ========================================================= */}
+                          {/* 1B. KONTEN TAB: LAPORAN MENU CUSTOM (DINAMIS)               */}
+                          {/* ========================================================= */}
+                          {laporanTab === 'laporan_custom' && (
+                            <div className="animate-in fade-in">
+                              <div className="p-4 border-b border-slate-100 bg-indigo-50/30 flex flex-col md:flex-row justify-between items-center gap-4">
+                                <div className="flex flex-col md:flex-row gap-2 flex-1 w-full">
+                                  <div className="relative flex-1">
+                                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                    <input type="text" placeholder="Cari Nama Karyawan..." value={filterCustomName} onChange={e => setFilterCustomName(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-indigo-500 transition-colors"/>
+                                  </div>
+                                  <input type="date" value={filterCustomDate} onChange={e => setFilterCustomDate(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none text-slate-500 focus:border-indigo-500 transition-colors"/>
+                                  <select value={filterCustomMenu} onChange={e => setFilterCustomMenu(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none font-bold text-slate-600 focus:border-indigo-500 transition-colors">
+                                    <option value="Semua">Semua Jenis Laporan / Menu</option>
+                                    {customMenus.map(menu => (
+                                      <option key={menu.id} value={menu.menu_name}>{menu.menu_name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                {hasPermission('laporan', 'export') && (
+                                  <button 
+                                    onClick={exportCustomLaporanExcel} 
+                                    disabled={isExporting} 
+                                    className={`px-4 py-2 rounded-lg text-xs font-bold border flex items-center gap-2 shrink-0 w-full md:w-auto justify-center transition-colors ${isExporting ? 'bg-indigo-200 text-indigo-800 border-indigo-300 cursor-wait' : 'bg-indigo-600 text-white hover:bg-indigo-700 border-indigo-700'}`}
+                                  >
+                                    <Download size={14}/> {isExporting ? 'Proses Excel...' : 'Rekap Custom (Excel)'}
+                                  </button>
+                                )}
+                              </div>
+                              
+                              <table className="w-full text-left">
+                                <thead className="bg-white border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                                  <tr><th className="px-6 py-4 w-40">Tanggal Masuk</th><th className="px-6 py-4 w-56">Pelapor</th><th className="px-6 py-4">Menu & Data Laporan Khusus</th><th className="px-6 py-4 text-center w-24">Detail</th></tr>
+                                </thead>
+                                
+                                {(() => {
+                                  const filteredCustomReports = fieldReports.filter(r => {
+                                    const isCustom = r.report_type !== 'patroli' && r.report_type !== 'reguler';
+                                    const matchName = (r.employees?.nama_lengkap || '').toLowerCase().includes(filterCustomName.toLowerCase());
+                                    const matchDate = filterCustomDate === '' || r.created_at.startsWith(filterCustomDate);
+                                    const matchMenu = filterCustomMenu === 'Semua' || r.report_type === filterCustomMenu;
+                                    return isCustom && matchName && matchDate && matchMenu;
+                                  });
+
+                                  if (filteredCustomReports.length === 0) {
+                                    return <tbody><tr><td colSpan="4" className="text-center py-12 text-slate-400 font-bold"><FileText size={32} className="mx-auto text-slate-200 mb-3"/>Tidak ada laporan custom yang cocok.</td></tr></tbody>;
+                                  }
+
+                                  return filteredCustomReports.map(report => {
+                                    let parsedDesc = null;
+                                    try { parsedDesc = JSON.parse(report.description); } catch (e) {}
+                                    const isExpanded = expandedReportId === report.id;
+
+                                    return (
+                                      <tbody key={report.id} className="divide-y divide-slate-100 border-b border-slate-100 last:border-0">
+                                        <tr onClick={() => setExpandedReportId(isExpanded ? null : report.id)} className={`hover:bg-slate-50 cursor-pointer transition-colors ${isExpanded ? 'bg-indigo-50/20' : ''}`}>
+                                          <td className="px-6 py-4 align-top">
+                                            <span className="font-bold text-slate-700 block">{new Date(report.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                                            <span className="text-[10px] text-slate-500 font-bold mt-1.5 bg-slate-100 px-2.5 py-1 rounded-md inline-flex items-center gap-1"><Clock size={10}/> {new Date(report.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB</span>
+                                          </td>
+                                          <td className="px-6 py-4 align-top font-bold text-slate-800">
+                                            <div className="flex items-center gap-3">
+                                              <div className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-xs font-black shadow-inner shrink-0">
+                                                {report.employees?.nama_lengkap ? report.employees.nama_lengkap.substring(0,2).toUpperCase() : '??'}
+                                              </div>
+                                              <span>{report.employees?.nama_lengkap || 'Unknown'}</span>
+                                            </div>
+                                          </td>
+                                          <td className="px-6 py-4 align-middle">
+                                            <span className="text-[10px] font-black uppercase tracking-widest bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md mb-1.5 inline-block">{report.report_type}</span>
+                                            <span className="font-black text-slate-700 text-sm block">{report.title}</span>
+                                          </td>
+                                          <td className="px-6 py-4 align-middle text-center">
+                                            <button className={`p-2 rounded-full transition-all ${isExpanded ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 hover:bg-slate-200 text-slate-500'}`}>
+                                                <ChevronRight size={18} className={`transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                                            </button>
+                                          </td>
+                                        </tr>
+                                        
+                                        {isExpanded && (
+                                          <tr className="bg-slate-50/30">
+                                            <td></td>
+                                            <td colSpan="3" className="px-6 py-6 pb-10 border-l-2 border-indigo-300">
+                                              {parsedDesc ? (
+                                                <div className="space-y-5 max-w-4xl animate-in slide-in-from-top-4 fade-in duration-300">
+                                                  {/* Rendering Struktur Laporan Dinamis */}
+                                                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                                                    <h4 className="text-xs font-black text-indigo-800 uppercase tracking-widest mb-4 border-b border-slate-100 pb-2">Rincian Data Pengisian Form</h4>
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                      {Object.entries(parsedDesc).map(([key, value]) => {
+                                                        if(key === 'photos' || key === 'notes') return null; // Foto dihandle terpisah
+                                                        return (
+                                                          <div key={key} className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wide block mb-1">{key}</span>
+                                                            <span className="text-sm font-bold text-slate-800 break-words">{typeof value === 'boolean' ? (value ? 'Ya / Terpilih' : 'Tidak') : value.toString()}</span>
+                                                          </div>
+                                                        )
+                                                      })}
+                                                      {parsedDesc.notes && (
+                                                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 md:col-span-2">
+                                                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-wide block mb-1">Catatan Kesimpulan</span>
+                                                          <span className="text-sm font-medium text-slate-700">{parsedDesc.notes}</span>
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  </div>
+
+                                                  {/* Rendering Foto Laporan Khusus */}
+                                                  {parsedDesc.photos && parsedDesc.photos.length > 0 && (
+                                                    <div className="flex flex-wrap gap-4">
+                                                      {parsedDesc.photos.map((p, i) => (
+                                                        <div key={i} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col w-56 group">
+                                                          <div className="relative h-44 bg-slate-100 overflow-hidden">
+                                                            <img src={p.url} alt="Lampiran Khusus" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                                                            <div className="absolute inset-0 bg-gradient-to-t from-indigo-900/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center p-3">
+                                                              <a href={p.url} target="_blank" rel="noreferrer" className="text-xs font-bold text-white flex items-center gap-1 hover:underline"><ArrowUpRight size={14}/> Full Resolusi</a>
+                                                            </div>
+                                                          </div>
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              ) : (
+                                                <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm inline-block max-w-xl animate-in slide-in-from-top-4 fade-in">
+                                                  <span className="text-sm text-slate-600 font-medium">{report.description}</span>
+                                                </div>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        )}
+                                      </tbody>
+                                    );
+                                  });
+                                })()}
+                              </table>
+                            </div>
+                          )}
 
                         {/* ========================================================= */}
                         {/* 2. KONTEN TAB: ARSIP PENGAJUAN CUTI & IZIN */}
@@ -3772,10 +4135,35 @@ export default function ClientAdmin() {
                   <p className="text-slate-500 text-sm mt-1">Kelola perizinan menu per pengguna, otoritas jabatan, dan parameter operasional.</p>
                 </div>
 
+                {/* === KOTAK UPLOAD LOGO PERUSAHAAN === */}
+                <div className="flex flex-col md:flex-row justify-between items-center bg-white p-5 rounded-2xl border border-slate-200 shadow-sm gap-4">
+                  <div className="flex items-center gap-4 w-full md:w-auto">
+                    <div className={`w-14 h-14 ${appConfig.color} rounded-xl flex items-center justify-center text-white font-bold shadow-inner overflow-hidden shrink-0 border border-slate-100`}>
+                       {appConfig.logo_url ? <img src={appConfig.logo_url} alt="Logo" className="w-full h-full object-cover bg-white" /> : appConfig.short}
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-base">{appConfig.name}</h3>
+                      <p className="text-xs text-slate-500">Logo ini akan tampil di Login Page dan Dashboard Admin.</p>
+                    </div>
+                  </div>
+                  {hasPermission('settings', 'edit') && (
+                    <div className="shrink-0 w-full md:w-auto">
+                       <input type="file" accept="image/png, image/jpeg" ref={companyLogoRef} onChange={handleUploadCompanyLogo} className="hidden" />
+                       <button onClick={() => companyLogoRef.current.click()} disabled={isUploadingLogo} className="w-full md:w-auto bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 border border-slate-200">
+                         {isUploadingLogo ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />} 
+                         {isUploadingLogo ? 'Mengunggah...' : 'Ganti Logo Perusahaan'}
+                       </button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex gap-2 border-b border-slate-200 pb-px">
                    <button onClick={() => setSettingTab('roles')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'roles' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Manajemen Jabatan (Role)</button>
                    <button onClick={() => setSettingTab('user_access')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'user_access' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Akses Per Pegawai</button>
                    <button onClick={() => setSettingTab('gps_rules')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'gps_rules' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Aturan GPS & Absensi</button>
+                   {hasPermission('form_builder', 'view') && (
+                    <button onClick={() => setSettingTab('form_builder')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${settingTab === 'form_builder' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>Form Builder</button>
+                  )}
                 </div>
 
                 {settingTab === 'user_access' && (
@@ -3823,6 +4211,8 @@ export default function ClientAdmin() {
                               alert("Gagal mereset saldo: " + error.message); 
                             }
                           }
+                          setEditPermissions({ ...perms, patroli: !!perms.patroli, reguler: !!perms.reguler, cuti: !!perms.cuti, koreksi: !!perms.koreksi, reimburse: !!perms.reimburse, bebas_gps: !!perms.bebas_gps, mobile: perms.mobile || {} });
+                          setIsAccessModalOpen(true);
                         }}   
                         className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl text-xs font-bold shadow-md transition-all flex items-center gap-2 shrink-0"
                       >
@@ -3923,7 +4313,7 @@ export default function ClientAdmin() {
                         </button>
                       )}
                     </div>
-                    
+    
                     {/* Render Setiap Klien/Cabang menjadi Tabel Tersendiri */}
                     {clientsList.map(client => (
                       <div key={client.id} className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
@@ -3989,7 +4379,185 @@ export default function ClientAdmin() {
                     )}
                   </div>
                 )}
+                {/* ========================================== */}
+                 {/* === MENU UTAMA: FORM BUILDER DINAMIS === */}
+                {/* ========================================== */}
+                {settingTab === 'form_builder' && hasPermission('form_builder', 'view') && (
+                  <div className="space-y-6 fade-in p-2 md:p-6 pb-24">
+                    
+                    {/* HEADER SECTION */}
+                    <div className="flex flex-col sm:flex-row gap-4 sm:justify-between sm:items-center bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                      <div>
+                        <h3 className="font-bold text-lg text-[#0a195c]">Menu Dinamis Mobile App</h3>
+                        <p className="text-xs text-slate-500 mt-1">Kelola dan buat template laporan lapangan baru untuk karyawan.</p>
+                      </div>
+                      
+                      {/* TOMBOL CREATE */}
+                      {hasPermission('form_builder', 'create') && (
+                        <button 
+                          onClick={() => setIsBuilderOpen(true)} 
+                          className="bg-[#0a195c] text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-blue-900 active:scale-95 transition-all shadow-md shrink-0"
+                        >
+                          <Plus size={18}/> Buat Menu Baru
+                        </button>
+                      )}
+                    </div>
+
+                    {/* LIST DAFTAR MENU CUSTOM YANG SUDAH DIBUAT */}
+                    <div className="space-y-3">
+                      <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest px-1">Daftar Menu Tersedia</h4>
+                      
+                      {customMenus && customMenus.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                          {customMenus.map(menu => (
+                            <div key={menu.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex justify-between items-center hover:border-blue-400 transition-colors group">
+                              <div className="flex items-center gap-3.5">
+                                <div className="p-2.5 bg-blue-50/80 text-[#0a195c] rounded-xl border border-blue-100">
+                                  <FileText size={20} />
+                                </div>
+                                <div>
+                                  <h4 className="font-bold text-sm text-slate-800">{menu.menu_name}</h4>
+                                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">{menu.fields?.length || 0} Komponen Form</p>
+                                </div>
+                              </div>
+                              
+                              {/* TOMBOL HAPUS */}
+                              {hasPermission('form_builder', 'delete') && (
+                                <button 
+                                  onClick={async () => {
+                                    if(window.confirm(`Yakin ingin menghapus menu "${menu.menu_name}"?`)) {
+                                      const { error } = await supabase.from('custom_menus').delete().eq('id', menu.id);
+                                      if(!error) {
+                                        alert("Menu berhasil dihapus!");
+                                        setCustomMenus(customMenus.filter(m => m.id !== menu.id));
+                                      } else {
+                                        alert("Gagal menghapus: " + error.message);
+                                      }
+                                    }
+                                  }}
+                                  className="p-2 text-rose-500 bg-rose-50 rounded-lg hover:bg-rose-500 hover:text-white transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                                  title="Hapus Menu"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="bg-white p-10 rounded-2xl border-2 border-slate-200 border-dashed text-center flex flex-col items-center justify-center">
+                          <FolderTree size={48} className="text-slate-300 mb-3"/>
+                          <p className="text-sm font-bold text-slate-600">Belum ada Menu Laporan Dinamis.</p>
+                          <p className="text-xs text-slate-400 mt-1">Klik tombol "Buat Menu Baru" di atas untuk mulai membuat.</p>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* MODAL BUILDER DRAG AND DROP */}
+                    {isBuilderOpen && hasPermission('form_builder', 'create') && (
+                      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+                        <div className="bg-white w-full max-w-3xl rounded-[2rem] overflow-hidden shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
+                          
+                          <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                            <div>
+                              <h2 className="font-black text-lg text-[#0a195c]">Pembuat Form Laporan</h2>
+                              <p className="text-xs text-slate-500 font-medium">Susun form dengan cara Drag & Drop.</p>
+                            </div>
+                            <button onClick={() => setIsBuilderOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300 transition-colors"><X size={16}/></button>
+                          </div>
+                          
+                          <div className="flex-1 overflow-y-auto p-6 bg-white space-y-6 custom-scrollbar">
+                            {/* PENGATURAN NAMA MENU */}
+                            <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
+                              <label className="text-[10px] font-black text-blue-800 uppercase tracking-widest block mb-2">Judul Menu Laporan Baru</label>
+                              <input type="text" placeholder="Cth: Laporan Inspeksi Toilet..." value={builderForm.menu_name} onChange={e => setBuilderForm({...builderForm, menu_name: e.target.value})} className="w-full p-3.5 border border-blue-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none font-bold text-sm shadow-sm transition-all"/>
+                            </div>
+
+                            {/* TOMBOL KOMPONEN LENGKAP */}
+                            <div>
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Pilih Komponen Form:</label>
+                              <div className="flex flex-wrap gap-2">
+                                <button onClick={() => handleAddBuilderField('short_text')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 transition-colors">+ Teks Singkat</button>
+                                <button onClick={() => handleAddBuilderField('long_text')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 transition-colors">+ Paragraf</button>
+                                <button onClick={() => handleAddBuilderField('number')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 transition-colors">+ Angka</button>
+                                <button onClick={() => handleAddBuilderField('dropdown')} className="bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-2 rounded-lg text-xs font-bold border border-blue-200 transition-colors">+ Dropdown</button>
+                                <button onClick={() => handleAddBuilderField('checkbox')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 transition-colors">+ Checkbox</button>
+                                <button onClick={() => handleAddBuilderField('camera')} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-2 rounded-lg text-xs font-bold border border-emerald-200 transition-colors">+ Kamera Foto</button>
+                                <button onClick={() => handleAddBuilderField('datetime')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 transition-colors">+ Tanggal/Jam</button>
+                                <button onClick={() => handleAddBuilderField('gps')} className="bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-2 rounded-lg text-xs font-bold border border-amber-200 transition-colors">+ GPS</button>
+                                <button onClick={() => handleAddBuilderField('signature')} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-2 rounded-lg text-xs font-bold border border-indigo-200 transition-colors">+ Tanda Tangan</button>
+                              </div>
+                            </div>
+
+                            {/* AREA DRAG AND DROP SUSUNAN FORM */}
+                            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 border-dashed min-h-[220px]">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-3">Susunan Form (Tahan icon garis tiga dan geser ke atas/bawah)</label>
+                              
+                              <div className="space-y-3">
+                                {builderForm.fields.map((field, index) => (
+                                  <div 
+                                    key={field.id} 
+                                    draggable 
+                                    onDragStart={() => handleDragStart(index)}
+                                    onDragOver={handleDragOver}
+                                    onDrop={() => handleDrop(index)}
+                                    className="flex flex-col md:flex-row gap-3 items-start md:items-center bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm cursor-grab active:cursor-grabbing hover:border-blue-400 transition-colors"
+                                  >
+                                    <div className="text-slate-300 px-1 cursor-grab active:cursor-grabbing">
+                                      <Menu size={20}/>
+                                    </div>
+                                    <div className="flex-1 w-full space-y-2">
+                                      <div className="flex justify-between items-center">
+                                        <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded uppercase tracking-wider">{field.type.replace('_', ' ')}</span>
+                                      </div>
+                                      
+                                      <input type="text" placeholder="Tuliskan judul/label pertanyaan di sini..." value={field.label} onChange={(e) => {
+                                        const newFields = [...builderForm.fields];
+                                        newFields[index].label = e.target.value;
+                                        setBuilderForm({...builderForm, fields: newFields});
+                                      }} className="w-full bg-transparent border-b-2 border-slate-100 focus:border-[#0a195c] outline-none font-bold text-sm text-slate-800 pb-1.5 transition-colors" />
+
+                                      {field.type === 'dropdown' && (
+                                        <input type="text" placeholder="Masukkan pilihan (pisahkan koma), Cth: Baik, Rusak, Perlu Servis" value={field.options} onChange={(e) => {
+                                          const newFields = [...builderForm.fields];
+                                          newFields[index].options = e.target.value;
+                                          setBuilderForm({...builderForm, fields: newFields});
+                                        }} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs outline-none focus:border-blue-400 mt-2 font-medium" />
+                                      )}
+                                    </div>
+                                    
+                                    <button onClick={() => {
+                                      const newFields = builderForm.fields.filter((_, i) => i !== index);
+                                      setBuilderForm({...builderForm, fields: newFields});
+                                    }} className="text-rose-500 p-2.5 bg-rose-50 rounded-xl hover:bg-rose-500 hover:text-white transition-colors shrink-0"><Trash2 size={16}/></button>
+                                  </div>
+                                ))}
+                                {builderForm.fields.length === 0 && (
+                                  <div className="flex flex-col items-center justify-center py-10 opacity-50">
+                                    <FileText size={48} className="text-slate-300 mb-2"/>
+                                    <p className="text-sm font-bold text-slate-500">Form laporan masih kosong.</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* FOOTER MODAL */}
+                          <div className="p-5 border-t border-slate-100 bg-slate-50 flex gap-3 justify-end items-center rounded-b-[2rem]">
+                            <button onClick={() => setIsBuilderOpen(false)} className="px-5 py-3 text-slate-500 font-bold hover:bg-slate-200 rounded-xl text-sm transition-colors">Batal</button>
+                            <button onClick={handleSaveCustomMenu} className="px-6 py-3 bg-[#0a195c] hover:bg-blue-900 text-white rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2">
+                              <CheckCircle2 size={18}/> Simpan & Aktifkan
+                            </button>
+                          </div>
+
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
+
+
             )}
             </div>
         </div>
@@ -4076,6 +4644,13 @@ export default function ClientAdmin() {
                       <span className="text-sm font-bold text-slate-700">Reimbursement</span>
                       <input type="checkbox" checked={editPermissions.reimburse} onChange={(e) => setEditPermissions({...editPermissions, reimburse: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300" />
                     </label>
+
+                    {customMenus.map(menu => (
+                      <label key={`dash_${menu.id}`} className="flex items-center justify-between p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
+                        <span className="text-sm font-bold text-slate-700 truncate mr-2" title={`Akses Data: ${menu.menu_name}`}>Laporan: {menu.menu_name}</span>
+                        <input type="checkbox" checked={editPermissions[`view_custom_${menu.id}`] || false} onChange={(e) => setEditPermissions({...editPermissions, [`view_custom_${menu.id}`]: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300 shrink-0" />
+                      </label>
+                    ))}
                   </div>
                 </div>
 
@@ -4083,8 +4658,9 @@ export default function ClientAdmin() {
                 <div>
                   <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Override Menu Mobile App</h4>
                   <div className="grid grid-cols-2 gap-2">
-                    {['absen', 'laporan', 'pengajuan', 'task', 'slip']
-                            .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) // <-- Proteksi Super Admin
+                    {/* GABUNGKAN ARRAY MENU BAWAAN DAN MENU CUSTOM */}
+                    {['absen', 'laporan', 'pengajuan', 'task', 'slip', ...customMenus.map(m => `custom_${m.id}`)]
+                            .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) 
                             .map(menu => {
                       let isChecked = false;
                       if (editPermissions?.mobile && editPermissions.mobile[menu] !== undefined) {
@@ -4097,10 +4673,18 @@ export default function ClientAdmin() {
                            isChecked = perms?.mobile?.[menu] || false;
                          }
                       }
+
+                      // Penamaan Label Dinamis
+                      let labelText = `Menu ${menu}`;
+                      if (menu.startsWith('custom_')) {
+                        const mObj = customMenus.find(m => `custom_${m.id}` === menu);
+                        labelText = mObj ? mObj.menu_name : 'Custom Menu';
+                      }
+
                       return (
                       <label key={menu} className="flex items-center gap-2 p-2.5 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
-                        <input type="checkbox" checked={isChecked} onChange={(e) => setEditPermissions({...editPermissions, mobile: {...(editPermissions.mobile || {}), [menu]: e.target.checked}})} className="w-4 h-4 text-blue-600 rounded border-slate-300" />
-                        <span className="text-xs font-bold text-slate-700 capitalize">Menu {menu}</span>
+                        <input type="checkbox" checked={isChecked} onChange={(e) => setEditPermissions({...editPermissions, mobile: {...(editPermissions.mobile || {}), [menu]: e.target.checked}})} className="w-4 h-4 text-blue-600 rounded border-slate-300 shrink-0" />
+                        <span className="text-xs font-bold text-slate-700 capitalize truncate" title={labelText}>{labelText}</span>
                       </label>
                     )})}
                   </div>
@@ -4509,11 +5093,18 @@ export default function ClientAdmin() {
                       <div className="mt-6">
                         <h4 className="text-xs font-black text-slate-800 uppercase mb-3">Akses Menu Aplikasi Mobile (Bawaan Role)</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                          {['absen', 'laporan', 'pengajuan', 'task', 'slip']
-                          .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) // <-- Proteksi Super Admin
+                          {/* GABUNGKAN ARRAY MENU BAWAAN DAN MENU CUSTOM */}
+                          {['absen', 'laporan', 'pengajuan', 'task', 'slip', ...customMenus.map(m => `custom_${m.id}`)]
+                          .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) 
                           .map(menu => {
-                            // Pastikan membaca data dengan aman
                             const isChecked = roleForm?.permissions?.mobile?.[menu] === true;
+                            
+                            // Penamaan Label Dinamis
+                            let labelText = `Menu ${menu}`;
+                            if (menu.startsWith('custom_')) {
+                              const mObj = customMenus.find(m => `custom_${m.id}` === menu);
+                              labelText = mObj ? mObj.menu_name : 'Custom Menu';
+                            }
                             
                             return (
                             <label key={menu} className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2.5 rounded-lg cursor-pointer hover:bg-slate-100 transition-colors">
@@ -4523,23 +5114,15 @@ export default function ClientAdmin() {
                                 onChange={(e) => {
                                   const newStatus = e.target.checked;
                                   setRoleForm(prev => {
-                                    // JURUS DEEP COPY: Cetak ulang memori dari nol agar React sadar ada perubahan
                                     const clonedPerms = JSON.parse(JSON.stringify(prev.permissions || {}));
-                                    
-                                    // Siapkan ruang 'mobile' jika sebelumnya kosong melompong
-                                    if (!clonedPerms.mobile) {
-                                      clonedPerms.mobile = {};
-                                    }
-                                    
-                                    // Masukkan status centang yang baru
+                                    if (!clonedPerms.mobile) clonedPerms.mobile = {};
                                     clonedPerms.mobile[menu] = newStatus;
-                                    
                                     return { ...prev, permissions: clonedPerms };
                                   });
                                 }}
-                                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 shrink-0"
                               />
-                              <span className="text-xs font-bold text-slate-700 capitalize">Menu {menu}</span>
+                              <span className="text-xs font-bold text-slate-700 capitalize truncate" title={labelText}>{labelText}</span>
                             </label>
                           )})}
                         </div>
@@ -5052,7 +5635,6 @@ export default function ClientAdmin() {
             </div>
           </div>
         )}
-
       </main>
 
       {/* MOBILE BOTTOM NAVIGATION (PROTECTED) */}
@@ -5082,7 +5664,6 @@ export default function ClientAdmin() {
           </button>
         )}
       </nav>
-
     </div>
   );
 }

@@ -51,21 +51,26 @@ export default function MobileApp() {
   
   // FUNGSI CEK HAK AKSES MENU MOBILE (SMART DETECTOR)
   const hasMobileMenu = (menuName) => {
-    // 1. Prioritas Utama: Cek Override (Perorangan)
+    // 1. BLOKIR MUTLAK DARI SUPERADMIN (Jika fitur dimatikan dari luar)
+    if (menuName === 'task' && clientFeatures?.task === false) return false;
+
+    // 2. CEK OVERRIDE PERORANGAN (Jika diset khusus per-pegawai)
     if (currentUser?.permissions?.mobile && currentUser.permissions.mobile[menuName] !== undefined) {
       return currentUser.permissions.mobile[menuName];
     }
-    
-    // 2. Prioritas Kedua: Cek Role (Bawaan Jabatan)
-    const role = currentUser?.role;
-    if (['Super Admin', 'Developer', 'Admin Perusahaan', 'Manager Operasional'].includes(role)) {
-      return true; // Manager ke atas otomatis buka semua
+
+    // 3. CEK BAWAAN JABATAN / ROLE (Membaca checkbox matriks dari dasbor Admin)
+    if (rolePermissions?.mobile && rolePermissions.mobile[menuName] !== undefined) {
+      return rolePermissions.mobile[menuName];
     }
-    if (['Staff Lapangan', 'Komandan Regu'].includes(role)) {
-      const defaults = { absen: true, laporan: true, pengajuan: true, task: false, slip: true };
-      return defaults[menuName] || false;
+
+    // 4. FALLBACK KHUSUS HANYA UNTUK DEVELOPER / SUPER ADMIN SAAS (Bukan Admin Perusahaan)
+    if (['Super Admin', 'Developer'].includes(currentUser?.role)) {
+      return true;
     }
-    return true; // Fallback darurat
+
+    // Jika tidak dicentang di mana-mana, pastikan sembunyi!
+    return false; 
   };
   const [laporanTab, setLaporanTab] = useState('reguler');
   const currentHour = new Date().getHours();
@@ -86,6 +91,8 @@ export default function MobileApp() {
   
   // State User & Database
   const [currentUser, setCurrentUser] = useState({ id: '', name: 'Loading...', role: '', division: '', avatar: '', avatar_url: null });
+  const [rolePermissions, setRolePermissions] = useState({});
+  const [clientFeatures, setClientFeatures] = useState({});
   const [permissions, setPermissions] = useState({ patroli: false, reguler: false, cuti: false, koreksi: false, reimburse: false, bebas_gps: false });
   const [attendanceHistory, setAttendanceHistory] = useState([]);
   const [reportHistory, setReportHistory] = useState([]);
@@ -194,22 +201,38 @@ export default function MobileApp() {
     }
   }, [activeMenu]);
 
+  // UBAH FUNGSI INI DI MobileApp.jsx:
+  const fetchCustomMenus = async (clientId) => {
+    const { data, error } = await supabase
+      .from('custom_menus')
+      .select('*')
+      .eq('client_id', clientId);
+    
+    if (data && !error) {
+      setCustomMenus(data);
+    }
+  };
+
   const fetchUserData = async (userId, parsedSession) => {
     try {
-      // Tambahkan clients(status) di dalam select
+      // 1. Tambahkan 'features' ke dalam select clients()
       const { data, error } = await supabase.from('employees')
-        .select('client_id, nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti, lokasi_penempatan, clients(status)')
+        .select('client_id, nama_lengkap, role, bidang_jasa, permissions, avatar_url, sisa_cuti, lokasi_penempatan, clients(status, features)')
         .eq('nik_karyawan', parsedSession.nik).single(); 
 
       if (error) throw error;
       
       if (data) {
-        // PROTEKSI SAAS: TENDANG KELUAR JIKA PERUSAHAAN DI-SUSPEND
         if (data.clients && data.clients.status === 'SUSPENDED') {
            alert("Akses Perusahaan dibekukan oleh Pusat. Silakan hubungi HRD Anda.");
            localStorage.removeItem('vest_user_session');
            navigate('/');
            return;
+        }
+
+        // 2. Simpan fitur Super Admin ke state
+        if (data.clients?.features) {
+           setClientFeatures(data.clients.features);
         }
 
         setCurrentUser({
@@ -226,11 +249,24 @@ export default function MobileApp() {
           location: data.lokasi_penempatan
         });
         
-        // --- TAMBAHAN PERBAIKAN: Update State Permissions ---
         if (data.permissions) {
           setPermissions(data.permissions);
         }
-        
+
+        // 3. TARIK HAK AKSES JABATAN (ROLE) SESUAI ADMIN PERUSAHAAN
+        const { data: roleData } = await supabase.from('company_roles')
+          .select('permissions')
+          .eq('name', data.role)
+          .eq('client_id', data.client_id)
+          .maybeSingle();
+
+        if (roleData && roleData.permissions) {
+           const parsedPerms = typeof roleData.permissions === 'string' ? JSON.parse(roleData.permissions) : roleData.permissions;
+           setRolePermissions(parsedPerms);
+        }
+
+        // 4. PANGGIL MENU CUSTOM DI SINI AGAR MUNCUL
+        fetchCustomMenus(data.client_id);
       }
     } catch (err) {
       console.error("Gagal menarik data profil:", err);
@@ -679,6 +715,10 @@ export default function MobileApp() {
     }
   };
 
+  const [customMenus, setCustomMenus] = useState([]);
+  const [activeCustomMenu, setActiveCustomMenu] = useState(null);
+  const [customFormData, setCustomFormData] = useState({});
+
   // FUNGSI UNTUK SUBMIT PERBAIKAN ABSEN
   const handleKoreksiSubmit = async () => {
     if (!koreksiForm.date || !koreksiForm.reason) return alert("Harap isi tanggal dan alasan perbaikan!");
@@ -871,7 +911,7 @@ export default function MobileApp() {
                       <h1 className="text-[10px] font-bold text-white/70 tracking-widest mb-0.5">SELAMAT {greetingText},</h1>
                       <h2 className="text-xl font-bold text-white tracking-tight">{currentUser.name}</h2>
                     </div>
-                    {renderUserAvatar("w-12 h-12 rounded-full border-2 border-white/20 shadow-lg")}
+                  {renderUserAvatar("w-12 h-12 rounded-full border-2 border-white/20 shadow-lg")}
                   </div>
                   <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/20 w-full shadow-inner relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2"></div>
@@ -993,6 +1033,21 @@ export default function MobileApp() {
                     </button>
                   )}
 
+                  {customMenus.map(menu => {
+                  if (!hasMobileMenu(`custom_${menu.id}`)) return null;
+                    return (
+                      <button key={menu.id} onClick={() => {
+                        setActiveCustomMenu(menu);
+                        setCustomFormData({});
+                        setActiveMenu('custom_form_view');
+                      }} className="flex flex-col items-center gap-2 active:scale-95">
+                        <div className="w-14 h-14 bg-gradient-to-br from-cyan-50 to-cyan-100/80 rounded-2xl flex items-center justify-center shadow-sm">
+                          <FileText size={24} className="text-cyan-600"/>
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">{menu.menu_name}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </main>
@@ -2029,6 +2084,196 @@ export default function MobileApp() {
               </div>
             </div>
           )}
+
+        {/* === VIEW: CUSTOM FORM DINAMIS (MOBILE RENDERER LENGKAP) === */}
+        <div className={`absolute inset-0 bg-[#F4F7FB] flex flex-col transition-transform duration-300 ease-in-out z-30 ${activeMenu === 'custom_form_view' ? 'translate-x-0' : 'translate-x-full'}`}>
+          <div className="px-6 pt-12 pb-6 bg-white shadow-sm flex items-center justify-between z-10">
+            <button onClick={() => setActiveMenu('home')} className="p-2 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200 active:scale-95"><ChevronLeft size={20}/></button>
+            <h1 className="text-lg font-bold text-slate-800 truncate px-2">{activeCustomMenu?.menu_name}</h1>
+            <div className="w-9"></div>
+          </div>
+
+          <main className="flex-1 overflow-y-auto px-5 py-6 pb-24 custom-scrollbar">
+            <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+              
+              {activeCustomMenu?.fields.map((field, idx) => (
+                <div key={field.id} className="border-b border-slate-100 pb-5 last:border-0 relative">
+                  <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest mb-2.5">
+                    <span className="text-blue-500 mr-1">{idx + 1}.</span> {field.label}
+                  </label>
+                  
+                  {/* TIPE 1: TEKS SINGKAT */}
+                  {field.type === 'short_text' && (
+                    <input type="text" placeholder="Ketik jawaban..." value={customFormData[field.id] || ''} onChange={e => setCustomFormData({...customFormData, [field.id]: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:border-[#0a195c] transition-colors"/>
+                  )}
+
+                  {/* TIPE 2: TEKS PARAGRAF */}
+                  {field.type === 'long_text' && (
+                    <textarea rows="3" placeholder="Deskripsikan dengan lengkap..." value={customFormData[field.id] || ''} onChange={e => setCustomFormData({...customFormData, [field.id]: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-700 outline-none focus:border-[#0a195c] resize-none custom-scrollbar transition-colors"></textarea>
+                  )}
+
+                  {/* TIPE 3: ANGKA */}
+                  {field.type === 'number' && (
+                    <input type="number" placeholder="0" value={customFormData[field.id] || ''} onChange={e => setCustomFormData({...customFormData, [field.id]: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-lg font-black text-slate-700 outline-none focus:border-[#0a195c] transition-colors"/>
+                  )}
+
+                  {/* TIPE 4: DROPDOWN PILIHAN */}
+                  {field.type === 'dropdown' && (
+                    <div className="relative">
+                      <select value={customFormData[field.id] || ''} onChange={e => setCustomFormData({...customFormData, [field.id]: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:border-[#0a195c] appearance-none cursor-pointer">
+                        <option value="">-- Pilih Opsi --</option>
+                        {field.options?.split(',').map((opt, i) => (
+                          <option key={i} value={opt.trim()}>{opt.trim()}</option>
+                        ))}
+                      </select>
+                      <ChevronRight size={16} className="absolute right-4 top-1/2 -translate-y-1/2 rotate-90 text-slate-400 pointer-events-none"/>
+                    </div>
+                  )}
+
+                  {/* TIPE 5: CHECKBOX */}
+                  {field.type === 'checkbox' && (
+                    <label className="flex items-center gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200 cursor-pointer active:scale-[0.98] transition-transform">
+                      <input type="checkbox" checked={customFormData[field.id] || false} onChange={e => setCustomFormData({...customFormData, [field.id]: e.target.checked})} className="w-6 h-6 rounded border-slate-300 text-[#0a195c] focus:ring-[#0a195c]"/>
+                      <span className="text-sm font-bold text-slate-700">Ya, Tandai Selesai</span>
+                    </label>
+                  )}
+
+                  {/* TIPE 6: TANGGAL & WAKTU */}
+                  {field.type === 'datetime' && (
+                    <input type="datetime-local" value={customFormData[field.id] || ''} onChange={e => setCustomFormData({...customFormData, [field.id]: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:border-[#0a195c]"/>
+                  )}
+
+                  {/* TIPE 7: PELACAK GPS (SATELIT) */}
+                  {field.type === 'gps' && (
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => {
+                        if(navigator.geolocation) {
+                          setCustomFormData({...customFormData, [field.id]: 'Mencari Lokasi...'});
+                          navigator.geolocation.getCurrentPosition(
+                            (pos) => setCustomFormData({...customFormData, [field.id]: `${pos.coords.latitude}, ${pos.coords.longitude}`}),
+                            () => setCustomFormData({...customFormData, [field.id]: 'Gagal mendapat akses GPS'})
+                          );
+                        }
+                      }} className="w-full bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                        <MapPin size={18}/> Pin Titik Lokasi Saat Ini
+                      </button>
+                      {customFormData[field.id] && (
+                        <div className="p-3 bg-slate-100 rounded-xl border border-slate-200 text-xs font-mono font-bold text-slate-600 text-center">
+                          Koord: {customFormData[field.id]}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TIPE 8: MULTI-KAMERA */}
+                  {field.type === 'camera' && (
+                    <div className="flex flex-col items-center gap-2">
+                      <input 
+                        type="file" 
+                        accept="image/jpeg,image/png,image/jpg" 
+                        capture="environment" 
+                        className="hidden" 
+                        id={`cam-${field.id}`}
+                        onChange={(e) => {
+                          const file = e.target.files[0];
+                          if(file) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => setCustomFormData({...customFormData, [field.id]: reader.result});
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                      />
+                      {!customFormData[field.id] ? (
+                        <label 
+                          htmlFor={`cam-${field.id}`} 
+                          className="w-full py-5 border-2 border-dashed border-blue-200 bg-blue-50/50 hover:bg-blue-50 text-[#0a195c] rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform cursor-pointer"
+                        >
+                          <Camera size={28} className="text-blue-400"/> Buka Kamera ({field.label})
+                        </label>
+                      ) : (
+                        <div className="relative w-full aspect-[3/4] md:aspect-video rounded-2xl overflow-hidden border-4 border-slate-100 shadow-md">
+                          <img src={customFormData[field.id]} alt="Preview" className="w-full h-full object-cover"/>
+                          <button onClick={() => setCustomFormData({...customFormData, [field.id]: null})} className="absolute top-3 right-3 bg-rose-500/90 backdrop-blur-sm text-white p-2.5 rounded-full shadow-lg active:scale-90 transition-transform"><Trash2 size={16}/></button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TIPE 9: TANDA TANGAN DIGITAL (CANVAS) */}
+                  {field.type === 'signature' && (
+                    <div className="flex flex-col gap-2">
+                      <div className="w-full h-40 bg-slate-50 border-2 border-slate-200 border-dashed rounded-2xl relative overflow-hidden">
+                        {!customFormData[field.id] ? (
+                          <>
+                            <div className="absolute inset-0 flex items-center justify-center opacity-20 pointer-events-none">
+                              <span className="font-black text-2xl uppercase tracking-widest rotate-[-15deg]">Tanda Tangan</span>
+                            </div>
+                            {/* CANVAS PINTAR */}
+                            <canvas 
+                                className="absolute inset-0 w-full h-full touch-none cursor-crosshair"
+                                onPointerDown={(e) => {
+                                  const canvas = e.target; const ctx = canvas.getContext('2d');
+                                  const rect = canvas.getBoundingClientRect();
+                                  canvas.width = rect.width; canvas.height = rect.height; // Set resolusi tajam
+                                  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 3; ctx.strokeStyle = '#0a195c';
+                                  ctx.beginPath();
+                                  ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+                                  canvas.isDrawing = true;
+                                }}
+                                onPointerMove={(e) => {
+                                  const canvas = e.target;
+                                  if (!canvas.isDrawing) return;
+                                  const ctx = canvas.getContext('2d');
+                                  const rect = canvas.getBoundingClientRect();
+                                  ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+                                  ctx.stroke();
+                                }}
+                                onPointerUp={(e) => { e.target.isDrawing = false; }}
+                                onPointerOut={(e) => { e.target.isDrawing = false; }}
+                            ></canvas>
+                          </>
+                        ) : (
+                          <img src={customFormData[field.id]} alt="Signature" className="w-full h-full object-contain bg-white"/>
+                        )}
+                      </div>
+                      
+                      <div className="flex gap-2 mt-1">
+                        {!customFormData[field.id] ? (
+                          <button onClick={(e) => {
+                            // Logika untuk menyimpan canvas menjadi gambar Base64
+                            const canvas = e.target.parentElement.previousSibling.querySelector('canvas');
+                            if(canvas) setCustomFormData({...customFormData, [field.id]: canvas.toDataURL('image/png')});
+                          }} className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2.5 rounded-xl text-xs font-bold border border-indigo-200 transition-colors">Kunci TTD</button>
+                        ) : (
+                          <button onClick={() => setCustomFormData({...customFormData, [field.id]: null})} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-600 py-2.5 rounded-xl text-xs font-bold border border-rose-200 transition-colors">Hapus & Ulangi TTD</button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              ))}
+
+              <button onClick={async () => {
+                // PROSES UPLOAD KE DATABASE
+                const payload = {
+                  client_id: currentUser.client_id,
+                  employee_id: currentUser.id,
+                  menu_id: activeCustomMenu.id,
+                  report_data: customFormData
+                };
+                const { error } = await supabase.from('custom_reports').insert([payload]);
+                if(!error) {
+                  alert("Laporan Berhasil Disimpan ke Sistem!");
+                  setActiveMenu('home');
+                } else { alert("Gagal mengirim laporan: " + error.message); }
+              }} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold text-sm shadow-[0_8px_20px_rgba(16,185,129,0.3)] active:scale-95 transition-all flex items-center justify-center gap-2 mt-8">
+                <CheckCircle2 size={20}/> Submit Laporan Lapangan
+              </button>
+
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   );

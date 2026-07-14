@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase'; 
 import { Building2, KeyRound, Eye, EyeOff, IdCard, LogIn, ShieldQuestion, CheckCircle2, ArrowLeft } from 'lucide-react';
@@ -26,6 +26,59 @@ export default function Login() {
     buttonHover: "hover:bg-blue-700",
     ringFocus: "focus:ring-blue-600"
   };
+
+  const [clientLogo, setClientLogo] = useState(null);
+  const [dynamicCompanyName, setDynamicCompanyName] = useState(clientData.companyName);
+
+  // === CCTV PENCARI LOGO OTOMATIS DI LATAR BELAKANG ===
+  useEffect(() => {
+    const fetchLogo = async () => {
+      // Hanya mencari jika NIK sudah diketik minimal 4 huruf
+      if (nik.length >= 4) {
+        try {
+          // Menggunakan .ilike agar otomatis mendeteksi huruf besar maupun kecil
+          const { data, error } = await supabase
+            .from('employees')
+            .select('client_id, clients(name, logo_url)')
+            .ilike('nik_karyawan', nik)
+            .maybeSingle();
+
+          if (data && data.clients) {
+            // PINTAR: Menangani jika Supabase mengembalikan Array maupun Object
+            const clientInfo = Array.isArray(data.clients) ? data.clients[0] : data.clients;
+
+            // Memastikan logo dan nama berganti
+            if (clientInfo && clientInfo.logo_url) {
+              setClientLogo(clientInfo.logo_url);
+            } else {
+              setClientLogo(null);
+            }
+
+            if (clientInfo && clientInfo.name) {
+              setDynamicCompanyName(clientInfo.name);
+            }
+          } else {
+            setClientLogo(null);
+            setDynamicCompanyName(clientData.companyName);
+          }
+        } catch (err) {
+          setClientLogo(null);
+          setDynamicCompanyName(clientData.companyName);
+        }
+      } else {
+        setClientLogo(null);
+        setDynamicCompanyName(clientData.companyName);
+      }
+    };
+
+    // Memberikan jeda 0.5 detik agar database tidak jebol saat user mengetik cepat
+    const delaySearch = setTimeout(() => {
+      fetchLogo();
+    }, 500);
+
+    return () => clearTimeout(delaySearch);
+  }, [nik]);
+  // ====================================================
 
   // 1. FUNGSI LOGIN UTAMA
   const handleLogin = async (e) => {
@@ -80,7 +133,6 @@ export default function Login() {
       
       if (error || !data) throw new Error('Pencarian gagal: NIK tidak ditemukan di database kami.');
 
-      // Generate 4 Angka Random (1000 - 9999)
       const generatedKey = Math.floor(1000 + Math.random() * 9000).toString();
       
       const { error: updateError } = await supabase.from('employees')
@@ -136,27 +188,37 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-slate-200 font-sans p-4 md:p-8">
       <div className="w-full max-w-5xl bg-white rounded-3xl shadow-2xl flex flex-col md:flex-row overflow-hidden transition-all duration-500">
         
-        {/* SISI DESKTOP (KIRI): Branding V.E.S.T */}
-        <div className="hidden md:flex md:w-1/2 bg-slate-950 p-12 flex-col justify-between relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3"></div>
-          <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-emerald-600/10 rounded-full blur-3xl translate-y-1/3 -translate-x-1/3"></div>
+        {/* SISI DESKTOP (KIRI): Branding V.E.S.T & Logo Hardcode */}
+        <div className="hidden md:flex md:w-1/2 bg-gradient-to-br from-blue-500 via-blue-700 to-blue-900 p-12 flex-col justify-between relative overflow-hidden">
+          {/* Mengurangi opacity pendaran agar background tidak terlalu sibuk */}
+          <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-300/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3"></div>
+          <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-blue-400/10 rounded-full blur-3xl translate-y-1/3 -translate-x-1/3"></div>
 
-          <div className="relative z-10">
-            <h1 className="text-4xl font-black text-white tracking-tight">V.E.S.T</h1>
-            <p className="text-sm text-slate-400 font-medium tracking-widest mt-1">VANDA ERP SYSTEM TECH</p>
+          {/* PERUBAHAN: Penambahan Logo Hardcode di samping teks V.E.S.T */}
+          <div className="relative z-10 flex items-center gap-4">
+            {/* Ganti src di bawah dengan path gambar logo kamu yang ada di folder public, misal: "/vanda-logo.png" */}
+            <img 
+              src="../vanda-tech-logo.png" 
+              alt="Vanda Tech Logo" 
+              className="w-16 h-16 object-contain drop-shadow-lg"
+            />
+            <div>
+              <h1 className="text-4xl font-black text-white tracking-tight">V.E.S.T</h1>
+              <p className="text-sm text-white font-medium tracking-widest mt-1">VANDA ERP SYSTEM TECH</p>
+            </div>
           </div>
 
-          <div className="relative z-10">
+          <div className="relative z-10 mt-8">
             <h2 className="text-3xl font-bold text-white mb-4 leading-tight">
               Sistem Tata Kelola<br />Operasional & Hierarki Tugas.
             </h2>
-            <p className="text-slate-400 max-w-md">
+            <p className="text-white max-w-md">
               Platform SaaS terintegrasi untuk manajemen HRIS, pengawasan lapangan, dan kontrol operasional multi-level.
             </p>
           </div>
 
-          <div className="relative z-10 text-xs text-slate-500">
-            &copy; 2026 V.E.S.T Core Systems. All rights reserved.
+          <div className="relative z-10 text-xs text-white">
+            &copy; {new Date().getFullYear()} V.E.S.T Core Systems. All rights reserved.
           </div>
         </div>
 
@@ -168,11 +230,20 @@ export default function Login() {
             {viewMode === 'login' && (
               <div className="animate-in fade-in slide-in-from-right-4 duration-300">
                 <div className="text-center md:text-left flex flex-col items-center md:items-start">
-                  <div className={`w-20 h-20 ${clientData.brandColor} rounded-2xl flex items-center justify-center shadow-lg shadow-blue-600/20 mb-6`}>
-                    <Building2 size={36} className="text-white" />
+                  
+                  {/* LOGO CLIENT: Akan berubah dari icon gedung ke Logo Client saat NIK diketik */}
+                  <div className="flex justify-center md:justify-start mb-6 h-20">
+                    {clientLogo ? (
+                      <img src={clientLogo} alt="Logo Perusahaan" className="h-full object-contain drop-shadow-md animate-in zoom-in duration-300" />
+                    ) : (
+                      <div className={`w-20 h-20 ${clientData.brandColor} rounded-2xl flex items-center justify-center shadow-lg shadow-blue-600/20`}>
+                        <Building2 size={36} className="text-white" />
+                      </div>
+                    )}
                   </div>
+
                   <h2 className="text-2xl md:text-3xl font-bold text-slate-800 tracking-tight">Selamat Datang</h2>
-                  <p className="text-slate-500 text-sm mt-2">Masuk ke portal internal <span className="font-bold text-slate-700">{clientData.companyName}</span></p>
+                  <p className="text-slate-500 text-sm mt-2">Masuk ke portal internal <span className="font-bold text-slate-700">{dynamicCompanyName}</span></p>
                 </div>
 
                 <form onSubmit={handleLogin} className="space-y-5 mt-8">
@@ -281,7 +352,13 @@ export default function Login() {
             )}
 
             {/* Footer Mobile */}
-            <div className="md:hidden pt-8 text-center"><p className="text-[11px] text-slate-400 font-medium">POWERED BY V.E.S.T</p></div>
+            <div className="md:hidden pt-8 text-center">
+              <div className="flex items-center justify-center gap-2 mb-1">
+                {/* Logo untuk Mobile (Pastikan logonya juga tersedia) */}
+                <img src="/path-ke-logo-vanda-tech-kamu.png" alt="Vanda Tech" className="w-6 h-6 object-contain" />
+              </div>
+              <p className="text-[11px] text-slate-400 font-medium">POWERED BY V.E.S.T</p>
+            </div>
 
           </div>
         </div>
