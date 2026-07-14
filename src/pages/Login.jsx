@@ -110,9 +110,16 @@ export default function Login() {
         };
         localStorage.setItem('vest_user_session', JSON.stringify(userSession));
         
-        if (['Super Admin', 'Developer', 'Admin Perusahaan', 'Manager Operasional'].includes(data.role)) {
+        const isExplicitMobile = window.location.pathname.includes('/mobile') || window.location.search.includes('mobile');
+
+        if (isExplicitMobile) {
+          // Jika link mendefinisikan mobile, paksa masuk ke mobile app tanpa memandang role
+          navigate('/mobile'); 
+        } else if (['Super Admin', 'Developer', 'Admin Perusahaan', 'Manager Operasional'].includes(data.role)) {
+          // Jika link biasa dan dia punya hak akses admin, lempar ke dashboard admin
           navigate('/admin'); 
         } else {
+          // Jika staff biasa, tetap ke mobile app
           navigate('/mobile'); 
         }
       }

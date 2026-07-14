@@ -7,6 +7,22 @@ import ClientAdmin from './pages/ClientAdmin';
 import MobileApp from './pages/MobileApp';
 import FormRekrutmen from './pages/FormRekrutmen';
 
+// ==============================================================
+// TAMBAHAN: Komponen Penjaga Rute Khusus Mobile
+// ==============================================================
+function MobileProtectedRoute({ children }) {
+  // Cek apakah user sudah memiliki sesi (sudah login)
+  const session = localStorage.getItem('vest_user_session');
+  
+  // Jika BELUM LOGIN, arahkan ke login dan berikan parameter ?mode=mobile
+  if (!session) {
+    return <Navigate to="/login?mode=mobile" replace />;
+  }
+  
+  // Jika SUDAH LOGIN, izinkan masuk ke komponen MobileApp
+  return children;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -17,10 +33,21 @@ export default function App() {
         {/* Rute Login */}
         <Route path="/login" element={<Login />} />
         
-        {/* Rute ke 3 Modul Utama */}
+        {/* Rute ke Modul Admin */}
         <Route path="/superadmin" element={<SuperAdmin />} />
         <Route path="/admin" element={<ClientAdmin />} />
-        <Route path="/mobile" element={<MobileApp />} />
+        
+        {/* ========================================================= */}
+        {/* PERUBAHAN: Rute Mobile Sekarang Dibungkus Penjaga         */}
+        {/* ========================================================= */}
+        <Route 
+          path="/mobile" 
+          element={
+            <MobileProtectedRoute>
+              <MobileApp />
+            </MobileProtectedRoute>
+          } 
+        />
 
         {/* Rute ke form recruitment */}
         <Route path="/recruitment" element={<FormRekrutmen />} />
