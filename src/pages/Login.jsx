@@ -393,7 +393,7 @@ export default function Login() {
             <div className="md:hidden pt-8 text-center">
               <div className="flex items-center justify-center gap-2 mb-1">
                 {/* Logo untuk Mobile (Pastikan logonya juga tersedia) */}
-                <img src="/vanda-tech-logo.png" alt="Vanda Tech" className="w-8 h-8 object-contain" />
+                <img src="/vanda-tech-logo.png" alt="Vanda Tech" className="w-10 h-10 object-contain" />
               </div>
               <p className="text-[11px] text-slate-400 font-medium">POWERED BY V.E.S.T</p>
             </div>
