@@ -1458,14 +1458,36 @@ export default function ClientAdmin() {
     return { totalDays: empAtts.length, totalHours: Math.round(totalHours), totalLateMinutes, totalMangkir, targetHariKerja };
   };
 
-  const calculatePPh21 = (brutoBulanan) => {
-    if (!brutoBulanan || brutoBulanan <= 5400000) return 0;
-    let tarif = 0;
-    if (brutoBulanan > 5400000 && brutoBulanan <= 10000000) tarif = 0.02;
-    else if (brutoBulanan > 10000000 && brutoBulanan <= 15000000) tarif = 0.04;
-    else if (brutoBulanan > 15000000 && brutoBulanan <= 20000000) tarif = 0.06;
-    else tarif = 0.09;
-    return Math.round(brutoBulanan * tarif);
+  const calculatePPh21 = (brutoBulanan, statusPTKP) => {
+    // Sistem PPh 21 Enterprise (Simulasi Standar PKP / UU HPP)
+    let ptkp = 54000000; // Default TK/0 (Tidak Kawin, 0 Tanggungan)
+    if (statusPTKP) {
+      const ptkpMap = {
+        'TK/0': 54000000, 'TK/1': 58500000, 'TK/2': 63000000, 'TK/3': 67500000,
+        'K/0': 58500000, 'K/1': 63000000, 'K/2': 67500000, 'K/3': 72000000
+      };
+      ptkp = ptkpMap[statusPTKP.toUpperCase()] || 54000000;
+    }
+
+    const brutoTahunan = brutoBulanan * 12;
+    // Biaya jabatan 5% dari bruto (Maksimal 6jt/tahun atau 500rb/bulan)
+    const biayaJabatanTahunan = Math.min(brutoTahunan * 0.05, 6000000); 
+    const penghasilanNettoTahunan = brutoTahunan - biayaJabatanTahunan;
+    const pkp = Math.max(0, penghasilanNettoTahunan - ptkp);
+
+    if (pkp <= 0) return 0; // Tidak kena pajak jika di bawah PTKP
+
+    // Tarif Progresif
+    let pph21Tahunan = 0;
+    let sisaPkp = pkp;
+
+    if (sisaPkp > 0) { const lap1 = Math.min(sisaPkp, 60000000); pph21Tahunan += lap1 * 0.05; sisaPkp -= lap1; }
+    if (sisaPkp > 0) { const lap2 = Math.min(sisaPkp, 190000000); pph21Tahunan += lap2 * 0.15; sisaPkp -= lap2; }
+    if (sisaPkp > 0) { const lap3 = Math.min(sisaPkp, 250000000); pph21Tahunan += lap3 * 0.25; sisaPkp -= lap3; }
+    if (sisaPkp > 0) { const lap4 = Math.min(sisaPkp, 4500000000); pph21Tahunan += lap4 * 0.30; sisaPkp -= lap4; }
+    if (sisaPkp > 0) { pph21Tahunan += sisaPkp * 0.35; }
+
+    return Math.round(pph21Tahunan / 12);
   };
 
   // 2. EXPORT TEMPLATE EXCEL CERDAS
@@ -1494,7 +1516,6 @@ export default function ClientAdmin() {
     XLSX.writeFile(wb, `Payroll_${payrollPeriod}.xlsx`);
   };
 
-  // 3. IMPORT EXCEL MASSAL
   const handleImportPayroll = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1509,6 +1530,8 @@ export default function ClientAdmin() {
       if (!window.confirm(`Proses & Hitung Payroll massal untuk ${data.length} karyawan?`)) return;
 
       let successData = [];
+      let uniqueLocations = new Set(); // Kumpulkan lokasi/cabang mana saja yang di-import
+
       for (const row of data) {
         const nik = String(row["NIK"]).trim();
         const employee = employees.find(emp => emp.nik_karyawan === nik);
@@ -1530,8 +1553,11 @@ export default function ClientAdmin() {
             }
           });
 
+          const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {});
+          const statusPTKP = pd.status_pernikahan || 'TK/0';
+
           const grossSalary = basicSalary + totalAdditions;
-          const pph21 = calculatePPh21(grossSalary);
+          const pph21 = calculatePPh21(grossSalary, statusPTKP);
           const netSalary = grossSalary - totalDeductions - pph21;
 
           successData.push({
@@ -1541,36 +1567,22 @@ export default function ClientAdmin() {
             additions: additions, deductions: deductions,
             gross_salary: grossSalary, tax_pph21: pph21, net_salary: netSalary, status: 'LUNAS'
           });
+
+          uniqueLocations.add(employee.lokasi_penempatan); // Simpan nama cabangnya
         }
       }
 
       if (successData.length > 0) {
+        // Hapus data lama yang seperiode agar tidak dobel, lalu insert
         await supabase.from('payrolls').delete().eq('client_id', currentUser.client_id).eq('period', payrollPeriod);
         const { error } = await supabase.from('payrolls').insert(successData);
         
         if (!error) { 
-           const totalNet = successData.reduce((sum, p) => sum + p.net_salary, 0);
-           
-           // 1. Hapus catatan cashflow massal sebelumnya agar tidak dobel
-           const refNumber = `PAY-MASS-${payrollPeriod}`;
-           await supabase.from('cashflows').delete().eq('reference_number', refNumber).eq('client_id', currentUser.client_id);
-           
-           // 2. OTOMATIS CATAT KE ARUS KAS (MASSAL)
-           const { error: cfError } = await supabase.from('cashflows').insert([{
-                 client_id: currentUser.client_id, 
-                 type: 'EXPENSE', 
-                 category: 'Gaji Karyawan (Massal)',
-                 amount: totalNet, 
-                 date: new Date().toISOString().split('T')[0],
-                 description: `Gaji massal periode ${payrollPeriod} untuk ${successData.length} karyawan`,
-                 reference_number: refNumber
-           }]);
-           
-           if (cfError) {
-             alert("Data Payroll tersimpan, tapi gagal mencatat ke Arus Kas: " + cfError.message);
-           } else {
-             alert(`Luar Biasa! ${successData.length} data Gaji diproses & Total Rp ${totalNet} otomatis masuk ke Arus Kas Pengeluaran.`);
+           // Panggil Konsolidator Kas untuk SETIAP cabang yang terdeteksi
+           for (const lokasi of uniqueLocations) {
+              await syncPayrollToCashflow(payrollPeriod, lokasi);
            }
+           alert(`Luar Biasa! ${successData.length} data Gaji diproses & Arus Kas masing-masing cabang otomatis dikonsolidasi.`);
            fetchAllData(); 
         } else {
            alert("Database Error: " + error.message);
@@ -1591,12 +1603,22 @@ export default function ClientAdmin() {
     const stats = calculateWorkStats(employee.id, payrollPeriod);
     let autoAdditions = [], autoDeductions = [];
 
+    // Auto-potongan keterlambatan & mangkir
     if (stats.totalLateMinutes > 0 && penaltyRates.latePerMinute > 0) {
       autoDeductions.push({ name: `Denda Telat (${stats.totalLateMinutes} Mnt)`, amount: stats.totalLateMinutes * penaltyRates.latePerMinute });
     }
     if (stats.totalMangkir > 0 && penaltyRates.absencePerDay > 0) {
       autoDeductions.push({ name: `Potongan Mangkir (${stats.totalMangkir} Hari)`, amount: stats.totalMangkir * penaltyRates.absencePerDay });
     }
+
+    // ENTERPRISE FITUR: Auto-hitung Potongan BPJS Karyawan
+    if (gapok > 0) {
+      const bpjsKesehatan = Math.min(gapok * 0.01, 120000); // 1% (Maksimal batas upah 12jt)
+      const bpjsKetenagakerjaan = gapok * 0.03; // 2% JHT + 1% JP
+      autoDeductions.push({ name: 'BPJS Kesehatan (1%)', amount: bpjsKesehatan });
+      autoDeductions.push({ name: 'BPJS Ketenagakerjaan (3%)', amount: bpjsKetenagakerjaan });
+    }
+
     setPayrollForm({ employee_id: empId, basic_salary: gapok, additions: autoAdditions, deductions: autoDeductions });
   };
 
@@ -1608,57 +1630,105 @@ export default function ClientAdmin() {
     setPayrollForm(prev => ({ ...prev, [type]: updated }));
   };
 
+  // ==========================================
+  // FITUR ENTERPRISE: KONSOLIDASI ARUS KAS GAJI
+  // ==========================================
+  const syncPayrollToCashflow = async (period, lokasiPenempatan) => {
+    try {
+      // 1. Ambil semua karyawan di lokasi/klien ini
+      const { data: emps } = await supabase.from('employees')
+        .select('id').eq('lokasi_penempatan', lokasiPenempatan).eq('client_id', currentUser.client_id);
+      
+      if (!emps || emps.length === 0) return;
+      const empIds = emps.map(e => e.id);
+
+      // 2. Ambil semua data gaji mereka di bulan tersebut
+      const { data: pays } = await supabase.from('payrolls')
+        .select('net_salary').eq('period', period).in('employee_id', empIds);
+
+      // 3. Jumlahkan total seluruh Gaji Bersih
+      const totalNet = pays ? pays.reduce((sum, p) => sum + p.net_salary, 0) : 0;
+
+      // 4. Buat Kode Referensi Unik per Lokasi & Periode (Agar tidak dobel/ter-replace)
+      const safeLokasi = (lokasiPenempatan || 'Pusat').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      const refNumber = `PAYROLL-${safeLokasi}-${period}`;
+
+      if (totalNet === 0) {
+         // Jika total 0 (mungkin datanya dihapus semua), hapus jurnal kas
+         await supabase.from('cashflows').delete().eq('reference_number', refNumber).eq('client_id', currentUser.client_id);
+         return;
+      }
+
+      // 5. Cek apakah Jurnal Kas untuk Cabang & Bulan ini sudah pernah dibuat
+      const { data: existingCf } = await supabase.from('cashflows')
+        .select('id').eq('reference_number', refNumber).eq('client_id', currentUser.client_id).maybeSingle();
+
+      const cfPayload = {
+        client_id: currentUser.client_id,
+        type: 'EXPENSE',
+        category: `Gaji Karyawan (${lokasiPenempatan || 'Pusat'})`,
+        amount: totalNet,
+        date: new Date().toISOString().split('T')[0],
+        transaction_date: new Date().toISOString().split('T')[0],
+        description: `Total Gaji periode ${period} untuk ${pays.length} karyawan di ${lokasiPenempatan || 'Pusat'}`,
+        reference_number: refNumber
+      };
+
+      // 6. REPLACE (Update) jika sudah ada, atau INSERT jika baru
+      if (existingCf) {
+         await supabase.from('cashflows').update(cfPayload).eq('id', existingCf.id);
+      } else {
+         await supabase.from('cashflows').insert([cfPayload]);
+      }
+    } catch (err) {
+      console.error("Gagal sinkronisasi arus kas:", err);
+    }
+  };
+
   const handleSaveManualPayroll = async (e) => {
     e.preventDefault();
     if (!payrollForm.employee_id) return alert("Pilih karyawan!");
-    const employee = employees.find(emp => emp.id === payrollForm.employee_id);
-    const stats = calculateWorkStats(employee.id, payrollPeriod);
-
-    const totalAdditions = payrollForm.additions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const totalDeductions = payrollForm.deductions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const basicSalary = Number(payrollForm.basic_salary || 0);
-    const grossSalary = basicSalary + totalAdditions;
-    const pph21 = calculatePPh21(grossSalary);
-    const netSalary = grossSalary - totalDeductions - pph21;
-
-    const payload = {
-      client_id: currentUser.client_id, employee_id: employee.id, 
-      period: payrollPeriod, period_month: payrollPeriod,
-      basic_salary: basicSalary, total_work_days: stats.totalDays, total_work_hours: stats.totalHours,
-      additions: payrollForm.additions.filter(a => a.name.trim() !== ''), 
-      deductions: payrollForm.deductions.filter(d => d.name.trim() !== ''),
-      gross_salary: grossSalary, tax_pph21: pph21, net_salary: netSalary, status: 'LUNAS'
-    };
-
-    await supabase.from('payrolls').delete().eq('employee_id', employee.id).eq('period', payrollPeriod);
-    const { error } = await supabase.from('payrolls').insert([payload]);
     
-    if (!error) { 
-      // 1. HAPUS CATATAN ARUS KAS LAMA (Mencegah dobel jika gaji dihitung ulang)
-      const refNumber = `PAY-${employee.nik_karyawan}-${payrollPeriod}`;
-      await supabase.from('cashflows').delete().eq('reference_number', refNumber).eq('client_id', currentUser.client_id);
-      
-      // 2. OTOMATIS CATAT KE ARUS KAS
-      const { error: cfError } = await supabase.from('cashflows').insert([{
-         client_id: currentUser.client_id, 
-         type: 'EXPENSE', 
-         category: 'Gaji Karyawan',
-         amount: netSalary, 
-         date: new Date().toISOString().split('T')[0],
-         description: `Gaji periode ${payrollPeriod} untuk ${employee.nama_lengkap}`,
-         reference_number: refNumber
-      }]);
+    try {
+      const employee = employees.find(emp => emp.id === payrollForm.employee_id);
+      if (!employee) return alert("Error: Data karyawan tidak ditemukan!");
+      const stats = calculateWorkStats(employee.id, payrollPeriod);
 
-      if (cfError) {
-         alert("Gaji tersimpan, tapi gagal mencatat ke Arus Kas: " + cfError.message);
-      } else {
-         alert(`Berhasil! Gaji bersih Rp ${netSalary} otomatis masuk ke Arus Kas Pengeluaran.`);
-      }
+      const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {});
+      const statusPTKP = pd.status_pernikahan || 'TK/0';
+
+      const totalAdditions = payrollForm.additions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const totalDeductions = payrollForm.deductions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const basicSalary = Number(payrollForm.basic_salary || 0);
+      const grossSalary = basicSalary + totalAdditions;
+      const pph21 = calculatePPh21(grossSalary, statusPTKP); 
+      const netSalary = grossSalary - totalDeductions - pph21;
+
+      const payload = {
+        client_id: currentUser.client_id, 
+        employee_id: employee.id, 
+        period: payrollPeriod, period_month: payrollPeriod,
+        basic_salary: basicSalary, total_work_days: stats.totalDays, total_work_hours: stats.totalHours,
+        additions: payrollForm.additions.filter(a => a.name.trim() !== ''), 
+        deductions: payrollForm.deductions.filter(d => d.name.trim() !== ''),
+        gross_salary: grossSalary, tax_pph21: pph21, net_salary: netSalary, status: 'LUNAS'
+      };
+
+      // 1. Simpan ke database Payroll
+      await supabase.from('payrolls').delete().eq('employee_id', employee.id).eq('period', payrollPeriod);
+      const { error: payrollError } = await supabase.from('payrolls').insert([payload]);
       
+      if (payrollError) throw new Error("Gagal menyimpan ke tabel Payroll: " + payrollError.message);
+
+      // 2. Panggil fungsi Konsolidator Kas yang baru dibuat!
+      await syncPayrollToCashflow(payrollPeriod, employee.lokasi_penempatan);
+
+      alert(`Berhasil! Gaji ${employee.nama_lengkap} tersimpan. Saldo Arus Kas untuk divisi/cabang terkait telah dihitung ulang secara otomatis.`);
       setIsPayrollModalOpen(false); 
       fetchAllData(); 
-    } else {
-      alert("Error: " + error.message);
+
+    } catch (err) {
+      alert("Terjadi Kesalahan Sistem: " + err.message);
     }
   };
 
@@ -3247,7 +3317,13 @@ export default function ClientAdmin() {
                         <span className="text-sm font-bold text-slate-500">Bulan Laporan:</span>
                         <input type="month" value={cashflowPeriod} onChange={e => setCashflowPeriod(e.target.value)} className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-[#0a195c] outline-none focus:border-blue-500 flex-1 md:flex-none" />
                       </div>
-                      <div className="flex gap-2 w-full md:w-auto">
+                      <div className="flex flex-wrap gap-2 w-full md:w-auto">
+                        {/* TOMBOL PDF BARU */}
+                        {hasPermission('finance', 'export') && (
+                          <button onClick={() => handleDownloadPDF('cashflow-pdf-report', `Laporan_Kas_${appConfig.name}_${cashflowPeriod}.pdf`)} className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-2 w-full md:w-auto">
+                            <Download size={14}/> Cetak PDF Laporan
+                          </button>
+                        )}
                         {hasPermission('finance', 'create') && (
                           <>
                             <button onClick={() => { setCashflowForm({ id: null, type: 'INCOME', category: 'Pendapatan', amount: '', date: new Date().toISOString().split('T')[0], description: '', reference_number: '' }); setIsCashflowModalOpen(true); }} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold transition-all border border-emerald-200 flex-1 md:flex-none flex items-center justify-center gap-2"><Plus size={14}/> Catat Pemasukan</button>
@@ -5635,6 +5711,112 @@ export default function ClientAdmin() {
             </div>
           </div>
         )}
+
+        {/* ========================================== */}
+        {/* TEMPLATE PDF ARUS KAS (DISEMBUNYIKAN TAPI TETAP DI-RENDER) */}
+        {/* ========================================== */}
+        {/* Perbaikan: Tetap di pojok kiri atas agar tidak error, tapi dibuat transparan & tidak bisa diklik */}
+        <div className="fixed top-0 left-0 -z-50 opacity-0 pointer-events-none">
+           
+           {/* Perbaikan: Menggunakan w-[190mm] agar pas persis dengan kertas A4 (210mm) dikurangi margin kiri-kanan 10mm */}
+           <div id="cashflow-pdf-report" className="bg-[#ffffff] text-[#1e293b] font-sans w-[190mm] p-8 box-border relative">
+              
+              {/* WATERMARK PERUSAHAAN */}
+              <div className="absolute inset-0 flex items-center justify-center opacity-[0.04] pointer-events-none overflow-hidden">
+                {appConfig.logo_url ? (
+                    <img src={appConfig.logo_url} crossOrigin="anonymous" className="w-[120mm] object-contain grayscale" alt="watermark" />
+                ) : (
+                    <span className="text-[150px] font-black">{appConfig.short}</span>
+                )}
+              </div>
+
+              {/* HEADER SURAT */}
+              <div className="flex justify-between items-start border-b-4 border-[#0f172a] pb-6 mb-6 relative z-10 w-full">
+                 <div className="flex items-center gap-4 max-w-[70%]">
+                    {/* LOGO DARI DATABASE */}
+                    <div className="w-16 h-16 bg-[#ffffff] text-[#0f172a] rounded-xl flex items-center justify-center font-black text-3xl shrink-0 overflow-hidden border border-[#e2e8f0] shadow-sm">
+                      {appConfig.logo_url ? (
+                        <img src={appConfig.logo_url} crossOrigin="anonymous" alt="Logo" className="w-full h-full object-contain p-1" />
+                      ) : (
+                        appConfig.short
+                      )}
+                    </div>
+                    <div className="flex flex-col justify-center">
+                       <h1 className="text-xl font-black uppercase tracking-widest text-[#0f172a] leading-tight mb-1 truncate">{appConfig.name}</h1>
+                       <p className="text-xs font-semibold text-[#64748b] m-0">Laporan Konsolidasi Arus Kas Perusahaan</p>
+                    </div>
+                 </div>
+                 <div className="text-right shrink-0 max-w-[30%]">
+                    <p className="text-[9px] font-black text-[#94a3b8] uppercase tracking-widest mb-1">Periode Laporan</p>
+                    <p className="text-lg font-black text-[#2563eb] border-2 border-[#2563eb] px-3 py-1 rounded-lg inline-block bg-[#eff6ff]">{cashflowPeriod}</p>
+                 </div>
+              </div>
+
+              {/* KOTAK RINGKASAN */}
+              <div className="flex gap-4 mb-6 relative z-10 w-full box-border">
+                 <div className="flex-1 border border-[#e2e8f0] p-4 rounded-xl bg-[#f8fafc] w-[33%] overflow-hidden">
+                    <p className="text-[9px] font-black text-[#64748b] uppercase tracking-wider mb-2">Total Pemasukan</p>
+                    <p className="text-lg font-black text-[#059669] truncate">{formatRupiah(monthIncome)}</p>
+                 </div>
+                 <div className="flex-1 border border-[#e2e8f0] p-4 rounded-xl bg-[#f8fafc] w-[33%] overflow-hidden">
+                    <p className="text-[9px] font-black text-[#64748b] uppercase tracking-wider mb-2">Total Pengeluaran</p>
+                    <p className="text-lg font-black text-[#e11d48] truncate">{formatRupiah(monthExpense)}</p>
+                 </div>
+                 <div className="flex-1 border border-[#0f172a] p-4 rounded-xl bg-[#0f172a] text-white shadow-lg w-[33%] overflow-hidden">
+                    <p className="text-[9px] font-black text-[#94a3b8] uppercase tracking-wider mb-2">Saldo Berjalan</p>
+                    <p className="text-lg font-black text-[#ffffff] truncate">{formatRupiah(monthIncome - monthExpense)}</p>
+                 </div>
+              </div>
+
+              {/* TABEL DATA ARUS KAS */}
+              <div className="relative z-10 w-full box-border">
+                 <table className="w-full text-left border-collapse border border-[#cbd5e1] mb-6 table-fixed">
+                    <thead className="bg-[#f1f5f9] text-[9px] font-black text-[#334155] uppercase tracking-wider">
+                       <tr>
+                          <th className="p-2 border border-[#cbd5e1] w-[18%]">Tanggal</th>
+                          <th className="p-2 border border-[#cbd5e1] w-[42%]">Kategori & Keterangan</th>
+                          <th className="p-2 border border-[#cbd5e1] w-[15%] text-center">Jenis</th>
+                          <th className="p-2 border border-[#cbd5e1] w-[25%] text-right">Nominal</th>
+                       </tr>
+                    </thead>
+                    <tbody className="text-[11px] font-medium text-[#1e293b]">
+                       {currentMonthCashflows.map(cf => (
+                          <tr key={cf.id} className="even:bg-[#f8fafc]">
+                             <td className="p-2 border border-[#cbd5e1] whitespace-nowrap">{cf.date}</td>
+                             <td className="p-2 border border-[#cbd5e1] break-words">
+                                <span className="font-bold block text-[#0f172a] mb-0.5">{cf.category}</span>
+                                <span className="text-[9px] text-[#64748b] leading-tight block">{cf.description}</span>
+                             </td>
+                             <td className="p-2 border border-[#cbd5e1] text-center">
+                                <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase inline-block ${cf.type === 'INCOME' ? 'bg-[#d1fae5] text-[#059669]' : 'bg-[#ffe4e6] text-[#e11d48]'}`}>
+                                   {cf.type === 'INCOME' ? 'Masuk' : 'Keluar'}
+                                </span>
+                             </td>
+                             <td className="p-2 border border-[#cbd5e1] text-right font-black whitespace-nowrap">
+                                {formatRupiah(cf.amount)}
+                             </td>
+                          </tr>
+                       ))}
+                       {currentMonthCashflows.length === 0 && (
+                          <tr><td colSpan="4" className="text-center py-6 text-[#94a3b8] font-semibold">Tidak ada transaksi tercatat pada periode ini.</td></tr>
+                       )}
+                    </tbody>
+                 </table>
+              </div>
+
+              {/* KOLOM TANDA TANGAN */}
+              <div className="mt-8 flex justify-end relative z-10 w-full">
+                 <div className="text-center w-[45mm]">
+                    <p className="text-[10px] text-[#64748b] mb-12">Dibuat & Disetujui Oleh,</p>
+                    <div className="border-b border-[#cbd5e1] mb-1 pb-1">
+                       <p className="text-xs font-bold text-[#0f172a] truncate">{currentUser.name}</p>
+                    </div>
+                    <p className="text-[8px] text-[#94a3b8] uppercase tracking-widest truncate">{currentUser.role || 'Admin Perusahaan'}</p>
+                 </div>
+              </div>
+
+           </div>
+        </div>
       </main>
 
       {/* MOBILE BOTTOM NAVIGATION (PROTECTED) */}

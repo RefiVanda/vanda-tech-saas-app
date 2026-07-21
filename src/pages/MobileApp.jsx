@@ -39,7 +39,6 @@ export default function MobileApp() {
   };
 
   const navigate = useNavigate();
-  // KONFIGURASI NAMA PERUSAHAAN
   const appConfig = {
     name: "PT Klien Nusantara",
     short: "KN",
@@ -48,18 +47,6 @@ export default function MobileApp() {
     light: "bg-blue-50"
   };
   const [activeMenu, setActiveMenu] = useState('home');
-
-  // --- TAMBAHAN: State Remember Me ---
-  const [rememberMe, setRememberMe] = useState(false);
-
-  // --- TAMBAHAN: Cek memori perangkat saat pertama kali halaman dimuat ---
-  useEffect(() => {
-    const savedNik = localStorage.getItem('vest_saved_nik');
-    if (savedNik) {
-      setNik(savedNik);
-      setRememberMe(true);
-    }
-  }, []);
   
   // FUNGSI CEK HAK AKSES MENU MOBILE (SMART DETECTOR)
   const hasMobileMenu = (menuName) => {
@@ -96,6 +83,74 @@ export default function MobileApp() {
   const izinFileInputRef = useRef(null);
   const attachmentInputRef = useRef(null);
   const [activeAttendanceId, setActiveAttendanceId] = useState(null);
+
+  // --- STATE OFFLINE DETECTOR ---
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [pendingSync, setPendingSync] = useState(0);
+
+  const checkPendingSync = async () => {
+    const data = await getOfflineData();
+    setPendingSync(data.length);
+  };
+
+  useEffect(() => {
+    const handleOnline = () => { 
+      setIsOffline(false); 
+      processOfflineSync(); // Sinyal kembali, langsung tembak data!
+    };
+    const handleOffline = () => setIsOffline(true);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    checkPendingSync(); // Cek ada data tertinggal atau tidak saat buka app
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  const processOfflineSync = async () => {
+    const queue = await getOfflineData();
+    if (queue.length === 0) return;
+
+    for (const item of queue) {
+      try {
+        if (item.type === 'ABSEN') {
+          const { absenPhoto, payloadDb, isCheckOut, attendanceId } = item.payload;
+          
+          // 1. Upload Foto Diam-diam di Latar Belakang
+          const base64Response = await fetch(absenPhoto);
+          const blob = await base64Response.blob();
+          const fileName = `absen-sync-${Date.now()}.jpg`;
+
+          const { error: uploadError } = await supabase.storage.from('attendance_photos').upload(fileName, blob);
+          if (uploadError) throw uploadError;
+
+          const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
+          
+          // 2. Insert ke Database
+          if (!isCheckOut) {
+             payloadDb.photo_url = publicUrlData.publicUrl;
+             await supabase.from('attendances').insert([payloadDb]);
+          } else {
+             payloadDb.photo_out_url = publicUrlData.publicUrl;
+             await supabase.from('attendances').update(payloadDb).eq('id', attendanceId);
+          }
+        }
+        // Hapus antrean di HP jika sukses
+        await deleteOfflineData(item.id);
+      } catch (err) {
+        console.error("Gagal sync data tertunda:", item.id, err);
+      }
+    }
+    checkPendingSync();
+    
+    // Tarik ulang data kehadiran agar UI ter-update
+    const session = JSON.parse(localStorage.getItem('vest_user_session') || '{}');
+    if (session.id) { checkTodayAttendance(session.id); fetchHistories(session.id); }
+    alert("Koneksi Internet Pulih: Data absensi offline berhasil diunggah ke server!");
+  };
 
   // Tambahkan ini di bawah state laporan / attendance history
   const [leaveHistory, setLeaveHistory] = useState([]);
@@ -161,6 +216,53 @@ export default function MobileApp() {
 
   const [selectedPayslip, setSelectedPayslip] = useState(null);
   const [payrolls, setPayrolls] = useState([]);
+
+  // ==========================================
+  // DATABASE OFFLINE LOKAL (INDEXED DB)
+  // ==========================================
+  const initOfflineDB = () => {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('VandaTechOffline', 1);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('sync_queue')) {
+          db.createObjectStore('sync_queue', { keyPath: 'id', autoIncrement: true });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  };
+
+  const saveOfflineData = async (type, payload) => {
+    const db = await initOfflineDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('sync_queue', 'readwrite');
+      tx.objectStore('sync_queue').add({ type, payload, timestamp: new Date().toISOString() });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  };
+
+  const getOfflineData = async () => {
+    const db = await initOfflineDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('sync_queue', 'readonly');
+      const req = tx.objectStore('sync_queue').getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  };
+
+  const deleteOfflineData = async (id) => {
+    const db = await initOfflineDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('sync_queue', 'readwrite');
+      tx.objectStore('sync_queue').delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  };
   
   // --- TAMBAHAN PERBAIKAN: Fungsi Format Rupiah ---
   const formatRupiah = (number) => {
@@ -791,6 +893,47 @@ export default function MobileApp() {
         }
       }
 
+      const d = new Date();
+      const timeString = d.toTimeString().split(' ')[0];
+      const dateString = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+
+      const isCheckOut = hasAbsenMasuk && !hasAbsenKeluar && activeAttendanceId;
+      
+      let payloadDb = {};
+      if (!isCheckOut) {
+        payloadDb = {
+          client_id: currentUser.client_id, 
+          employee_id: currentUser.id, 
+          date: dateString, 
+          check_in_time: timeString, 
+          location_gps: lokasiStr, 
+          status: 'HADIR'
+        };
+      } else {
+        payloadDb = { check_out_time: timeString };
+      }
+
+      // ==========================================
+      // CEK STATUS INTERNET (MODE OFFLINE)
+      // ==========================================
+      if (!navigator.onLine) {
+         await saveOfflineData('ABSEN', { 
+           absenPhoto: absenPhoto, 
+           payloadDb: payloadDb, 
+           isCheckOut: isCheckOut, 
+           attendanceId: activeAttendanceId 
+         });
+         checkPendingSync();
+         alert("📡 Sinyal Terputus! Jangan khawatir, data absen & foto Anda sudah aman disimpan di memori HP. Sistem akan mengirim otomatis saat sinyal kembali.");
+         setActiveMenu('home');
+         setAbsenPhoto(null);
+         setIsSubmitting(false);
+         return; // Hentikan proses, jangan lanjut ke Supabase!
+      }
+
+      // ==========================================
+      // MODE ONLINE (NORMAL)
+      // ==========================================
       const base64Response = await fetch(absenPhoto);
       const blob = await base64Response.blob();
       const fileName = `absen-${currentUser.id}-${Date.now()}.jpg`;
@@ -801,33 +944,14 @@ export default function MobileApp() {
       const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
       const finalPhotoUrl = publicUrlData.publicUrl;
 
-      const d = new Date();
-      const timeString = d.toTimeString().split(' ')[0];
-      const dateString = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-
-      if (!hasAbsenMasuk) {
-        // PROSES 1: CHECK-IN SHIFT BARU (Jam Berapapun)
-        const payloadIn = {
-          client_id: currentUser.client_id, 
-          employee_id: currentUser.id, 
-          date: dateString, // Tanggal dimulainya shift
-          check_in_time: timeString, 
-          location_gps: lokasiStr, 
-          photo_url: finalPhotoUrl, 
-          status: 'HADIR'
-        };
-        const { error } = await supabase.from('attendances').insert([payloadIn]);
+      if (!isCheckOut) {
+        payloadDb.photo_url = finalPhotoUrl;
+        const { error } = await supabase.from('attendances').insert([payloadDb]);
         if (error) throw error;
         alert("Check-In Shift berhasil!");
-        
-      } else if (!hasAbsenKeluar && activeAttendanceId) {
-        // PROSES 2: CHECK-OUT SHIFT (Meskipun sudah beda hari, dia akan mengunci ke ID Shift Semalam)
-        const payloadOut = {
-          check_out_time: timeString,
-          photo_out_url: finalPhotoUrl
-          // Catatan: Kita tidak mengubah 'date', agar hitungan masuknya tetap di tanggal Shift dimulai.
-        };
-        const { error } = await supabase.from('attendances').update(payloadOut).eq('id', activeAttendanceId);
+      } else {
+        payloadDb.photo_out_url = finalPhotoUrl;
+        const { error } = await supabase.from('attendances').update(payloadDb).eq('id', activeAttendanceId);
         if (error) throw error;
         alert("Check-Out Shift selesai. Selamat istirahat!");
       }
@@ -934,6 +1058,30 @@ export default function MobileApp() {
                   </div>
                 </div>
               </div>
+
+              {/* ========================================= */}
+              {/* INDIKATOR OFFLINE & SINKRONISASI AKTIF    */}
+              {/* ========================================= */}
+              {(isOffline || pendingSync > 0) && (
+                <div className="px-5 -mt-5 mb-5 relative z-20 animate-in fade-in zoom-in duration-300">
+                  <div className={`p-4 rounded-2xl flex items-center justify-between shadow-lg border ${isOffline ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                     <div className="flex items-center gap-3">
+                       <div className={`p-2.5 rounded-xl ${isOffline ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
+                          {isOffline ? <FileWarning size={20}/> : <RefreshCw size={20} className="animate-spin"/>}
+                       </div>
+                       <div>
+                         <p className="text-sm font-black">{isOffline ? 'Sinyal Terputus' : 'Menunggu Koneksi Stabil...'}</p>
+                         <p className="text-[10px] font-semibold opacity-80">{pendingSync} data tersimpan di HP menanti dikirim.</p>
+                       </div>
+                     </div>
+                     {!isOffline && pendingSync > 0 && (
+                       <button onClick={processOfflineSync} className="px-4 py-2 bg-amber-600 text-white rounded-xl text-xs font-bold shadow-md active:scale-95 transition-transform">
+                          Kirim Sekarang
+                       </button>
+                     )}
+                  </div>
+                </div>
+              )}
 
               <div className="px-5 -mt-10">
                 <div className="bg-white rounded-2xl p-4 shadow-lg shadow-blue-900/5 border border-slate-100">

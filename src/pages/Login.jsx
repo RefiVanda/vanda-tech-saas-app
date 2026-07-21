@@ -397,7 +397,6 @@ export default function Login() {
               </div>
               <p className="text-[11px] text-slate-400 font-medium">POWERED BY V.E.S.T</p>
             </div>
-
           </div>
         </div>
       </div>
