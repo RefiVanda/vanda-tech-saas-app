@@ -319,7 +319,14 @@ export default function ClientAdmin() {
   const [officeLocations, setOfficeLocations] = useState([]);
   
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
-  const [clientForm, setClientForm] = useState({ id: null, name: '', status: 'ACTIVE' });
+  const [clientForm, setClientForm] = useState({ 
+    id: null, 
+    name: '', 
+    status: 'ACTIVE',
+    cutoff_start: 21,      // Default tanggal mulai bulan lalu
+    cutoff_end: 20,        // Default tanggal akhir bulan ini
+    management_fee: 10     // Default 10% fee untuk klien ini
+  });
   
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [locationForm, setLocationForm] = useState({ id: null, client_id: '', name: '', latitude: '', longitude: '', radius: 50 });
@@ -1428,66 +1435,159 @@ export default function ClientAdmin() {
   // TARIF POTONGAN (GLOBAL) - Diatur di halaman depan untuk Excel & Manual
   const [penaltyRates, setPenaltyRates] = useState({ latePerMinute: 0, absencePerDay: 0 });
 
-  // 1. PENGHITUNG CERDAS (Absensi & Telat)
+  // ==========================================
+  // PENGATURAN PAYROLL ENTERPRISE (CUT-OFF, BPJS, INVOICE FEE)
+  // ==========================================
+  const [payrollSettings, setPayrollSettings] = useState({
+    cutOffStart: 21,         // Tgl mulai absensi bulan sebelumnya
+    cutOffEnd: 20,           // Tgl akhir absensi bulan berjalan
+    bpjsJkkRate: 0.24,       // Persentase JKK (Risiko Sangat Rendah 0.24%)
+    managementFeeRate: 10,   // Default 10% fee saat generate Invoice ke Klien
+  });
+
+  // Helper penentu rentang tanggal Cut-Off (Sekarang menerima parameter dinamis)
+  const getCutOffRange = (periodYYYYMM, startDay = 21, endDay = 20) => {
+    const [year, month] = periodYYYYMM.split('-').map(Number);
+    const startDate = new Date(year, month - 2, startDay);
+    const endDate = new Date(year, month - 1, endDay);
+    
+    return {
+      startStr: startDate.toISOString().split('T')[0],
+      endStr: endDate.toISOString().split('T')[0]
+    };
+  };
+
+  // 1. PENGHITUNG CERDAS (Absensi, Telat, & Uang Lembur)
   const calculateWorkStats = (employeeId, periodYYYYMM) => {
-    const empAtts = attendances.filter(a => a.employee_id === employeeId && a.date.startsWith(periodYYYYMM) && a.check_in_time);
-    const empShifts = shifts.filter(s => s.employee_id === employeeId && s.date.startsWith(periodYYYYMM) && s.shift_type !== 'Libur');
+    // Cari data karyawan untuk mengetahui di Klien/Cabang mana ia ditempatkan
+    const employee = employees.find(e => e.id === employeeId);
+    if (!employee) return { totalDays: 0, totalHours: 0, totalLateMinutes: 0, totalMangkir: 0, targetHariKerja: 0, totalOvertimeHours: 0 };
+
+    // Cari konfigurasi Klien di clientsList berdasarkan lokasi_penempatan karyawan
+    const clientData = clientsList.find(c => c.name === employee.lokasi_penempatan) || { cutoff_start: 21, cutoff_end: 20 };
+
+    // Tarik rentang waktu menggunakan settingan KHUSUS Klien tersebut
+    const { startStr, endStr } = getCutOffRange(periodYYYYMM, clientData.cutoff_start, clientData.cutoff_end);
+    
+    // Filter absensi & shift hanya dalam rentang Cut-Off
+    const empAtts = attendances.filter(a => a.employee_id === employeeId && a.date >= startStr && a.date <= endStr && a.check_in_time); //
+    const empShifts = shifts.filter(s => s.employee_id === employeeId && s.date >= startStr && s.date <= endStr && s.shift_type !== 'Libur'); //
 
     let totalHours = 0;
     let totalLateMinutes = 0;
+    let totalOvertimeHours = 0;
 
-    empAtts.forEach(a => {
-      const shift = empShifts.find(s => s.date === a.date);
-      if (shift && shift.time_in && a.check_in_time) {
-        const [sH, sM] = shift.time_in.split(':').map(Number);
-        const [aH, aM] = a.check_in_time.split(':').map(Number);
-        let lateMins = ((aH * 60) + aM) - ((sH * 60) + sM);
-        if (lateMins > 10) totalLateMinutes += lateMins; 
+    empAtts.forEach(a => { //[cite: 1]
+      const shift = empShifts.find(s => s.date === a.date); //[cite: 1]
+      if (shift && shift.time_in && a.check_in_time) { //[cite: 1]
+        const [sH, sM] = shift.time_in.split(':').map(Number); //[cite: 1]
+        const [aH, aM] = a.check_in_time.split(':').map(Number); //[cite: 1]
+        let lateMins = ((aH * 60) + aM) - ((sH * 60) + sM); //[cite: 1]
+        if (lateMins > 10) totalLateMinutes += lateMins; //[cite: 1]
       }
-      if (a.check_in_time && a.check_out_time) {
-        const [inH, inM] = a.check_in_time.split(':').map(Number);
-        const [outH, outM] = a.check_out_time.split(':').map(Number);
-        let daily = (outH + outM / 60) - (inH + inM / 60);
-        if (daily > 4) daily -= 1; 
-        if (daily > 0) totalHours += daily;
+      
+      if (a.check_in_time && a.check_out_time) { //[cite: 1]
+        const [inH, inM] = a.check_in_time.split(':').map(Number); //[cite: 1]
+        const [outH, outM] = a.check_out_time.split(':').map(Number); //[cite: 1]
+        let dailyTotal = (outH + outM / 60) - (inH + inM / 60); //[cite: 1]
+        
+        // Standar 8 Jam kerja + 1 Jam istirahat
+        if (dailyTotal > 4) dailyTotal -= 1; // Kurangi jam istirahat[cite: 1]
+        
+        if (dailyTotal > 0) totalHours += dailyTotal; //[cite: 1]
+
+        // Deteksi Lembur (Kelebihan dari 8 Jam Kerja)
+        if (dailyTotal > 8) {
+          totalOvertimeHours += (dailyTotal - 8);
+        }
       }
     });
 
-    const targetHariKerja = empShifts.length > 0 ? empShifts.length : 22; 
-    const totalMangkir = Math.max(0, targetHariKerja - empAtts.length);
-    return { totalDays: empAtts.length, totalHours: Math.round(totalHours), totalLateMinutes, totalMangkir, targetHariKerja };
+    const targetHariKerja = empShifts.length > 0 ? empShifts.length : 22; //[cite: 1]
+    const totalMangkir = Math.max(0, targetHariKerja - empAtts.length); //[cite: 1]
+    
+    return { 
+      totalDays: empAtts.length, //[cite: 1]
+      totalHours: Math.round(totalHours), //[cite: 1]
+      totalLateMinutes, //[cite: 1]
+      totalMangkir, //[cite: 1]
+      targetHariKerja, //[cite: 1]
+      totalOvertimeHours: Number(totalOvertimeHours.toFixed(1)) 
+    };
   };
 
-  const calculatePPh21 = (brutoBulanan, statusPTKP) => {
-    // Sistem PPh 21 Enterprise (Simulasi Standar PKP / UU HPP)
-    let ptkp = 54000000; // Default TK/0 (Tidak Kawin, 0 Tanggungan)
-    if (statusPTKP) {
-      const ptkpMap = {
-        'TK/0': 54000000, 'TK/1': 58500000, 'TK/2': 63000000, 'TK/3': 67500000,
-        'K/0': 58500000, 'K/1': 63000000, 'K/2': 67500000, 'K/3': 72000000
-      };
-      ptkp = ptkpMap[statusPTKP.toUpperCase()] || 54000000;
+  // ENGINE PPH 21 TER 2024 & BPJS ENTERPRISE
+  const calculatePayrollTaxesAndBPJS = (basicSalary, totalAdditions, statusPTKP = 'TK/0') => {
+    // --- A. HITUNG BPJS (Batas Maksimal Upah Sesuai Regulasi 2024) ---
+    const batasUpahKesehatan = 12000000;
+    const batasUpahJP = 10042300; 
+
+    const dasarPengaliKes = Math.min(basicSalary, batasUpahKesehatan);
+    const dasarPengaliJP = Math.min(basicSalary, batasUpahJP);
+
+    // Potongan Karyawan (Pengurang Netto)
+    const potonganBPJSKes = dasarPengaliKes * 0.01; // 1%
+    const potonganJHT = basicSalary * 0.02;         // 2%
+    const potonganJP = dasarPengaliJP * 0.01;       // 1%
+    const totalPotonganBPJSKaryawan = potonganBPJSKes + potonganJHT + potonganJP;
+
+    // Tanggungan Perusahaan (Penambah Gross untuk Pajak TER)
+    const tunjanganBPJSKes = dasarPengaliKes * 0.04;              // 4%
+    const tunjanganJKK = basicSalary * (payrollSettings.bpjsJkkRate / 100); // 0.24% Default
+    const tunjanganJKM = basicSalary * 0.003;                     // 0.3%
+    
+    // Catatan: JHT 3.7% & JP 2% porsi perusahaan TIDAK menambah objek PPh 21 Gross
+    const bebanJHTPerusahaan = basicSalary * 0.037;
+    const bebanJPPerusahaan = dasarPengaliJP * 0.02;
+    const totalBebanBPJSPerusahaan = tunjanganBPJSKes + tunjanganJKK + tunjanganJKM + bebanJHTPerusahaan + bebanJPPerusahaan;
+
+    // --- B. HITUNG PPh 21 (METODE TER 2024) ---
+    // Gross untuk perhitungan Pajak TER DJP = Gaji + Tunjangan Uang + Tunjangan JKK/JKM/Kes dari Perusahaan
+    const grossForTax = basicSalary + totalAdditions + tunjanganBPJSKes + tunjanganJKK + tunjanganJKM;
+    
+    // Penentuan Kategori TER Berdasarkan Status PTKP
+    let kategoriTER = 'A';
+    const cleanPTKP = statusPTKP.toUpperCase().replace(/\s/g, '');
+    if (['TK/0', 'TK/1', 'K/0'].includes(cleanPTKP)) kategoriTER = 'A';
+    else if (['TK/2', 'TK/3', 'K/1', 'K/2'].includes(cleanPTKP)) kategoriTER = 'B';
+    else if (['K/3'].includes(cleanPTKP)) kategoriTER = 'C';
+
+    // LOGIKA SIMULASI TER (Karena tabel TER DJP memiliki puluhan bracket, berikut logic ekstraksi dinamisnya)
+    // Pada implementasi produksi sejati, Anda wajib menyandingkan nilai grossForTax dengan Tabel Tarif Efektif DJP di Database.
+    // Untuk keperluan kelancaran sistem ini, kita menggunakan rata-rata tarif efektif aproksimasi berdasar bracket.
+    let tarifEfektif = 0;
+    
+    if (kategoriTER === 'A') {
+        if (grossForTax <= 5400000) tarifEfektif = 0;
+        else if (grossForTax <= 5650000) tarifEfektif = 0.0025;
+        else if (grossForTax <= 5950000) tarifEfektif = 0.005;
+        else if (grossForTax <= 15000000) tarifEfektif = 0.05; 
+        else tarifEfektif = 0.10; // dst mengacu UU HPP
+    } else if (kategoriTER === 'B') {
+        if (grossForTax <= 6200000) tarifEfektif = 0;
+        else if (grossForTax <= 6500000) tarifEfektif = 0.0025;
+        else if (grossForTax <= 15000000) tarifEfektif = 0.05;
+        else tarifEfektif = 0.10;
+    } else if (kategoriTER === 'C') {
+        if (grossForTax <= 6600000) tarifEfektif = 0;
+        else if (grossForTax <= 6950000) tarifEfektif = 0.0025;
+        else if (grossForTax <= 15000000) tarifEfektif = 0.05;
+        else tarifEfektif = 0.10;
     }
 
-    const brutoTahunan = brutoBulanan * 12;
-    // Biaya jabatan 5% dari bruto (Maksimal 6jt/tahun atau 500rb/bulan)
-    const biayaJabatanTahunan = Math.min(brutoTahunan * 0.05, 6000000); 
-    const penghasilanNettoTahunan = brutoTahunan - biayaJabatanTahunan;
-    const pkp = Math.max(0, penghasilanNettoTahunan - ptkp);
+    const pph21Sebulan = Math.round(grossForTax * tarifEfektif);
 
-    if (pkp <= 0) return 0; // Tidak kena pajak jika di bawah PTKP
-
-    // Tarif Progresif
-    let pph21Tahunan = 0;
-    let sisaPkp = pkp;
-
-    if (sisaPkp > 0) { const lap1 = Math.min(sisaPkp, 60000000); pph21Tahunan += lap1 * 0.05; sisaPkp -= lap1; }
-    if (sisaPkp > 0) { const lap2 = Math.min(sisaPkp, 190000000); pph21Tahunan += lap2 * 0.15; sisaPkp -= lap2; }
-    if (sisaPkp > 0) { const lap3 = Math.min(sisaPkp, 250000000); pph21Tahunan += lap3 * 0.25; sisaPkp -= lap3; }
-    if (sisaPkp > 0) { const lap4 = Math.min(sisaPkp, 4500000000); pph21Tahunan += lap4 * 0.30; sisaPkp -= lap4; }
-    if (sisaPkp > 0) { pph21Tahunan += sisaPkp * 0.35; }
-
-    return Math.round(pph21Tahunan / 12);
+    return {
+      totalPotonganBPJSKaryawan,
+      rincianPotonganBPJS: [
+        { name: 'BPJS Kesehatan (1%)', amount: Math.round(potonganBPJSKes) },
+        { name: 'BPJS JHT (2%)', amount: Math.round(potonganJHT) },
+        { name: 'BPJS JP (1%)', amount: Math.round(potonganJP) }
+      ],
+      totalBebanBPJSPerusahaan,
+      grossForTax, // Gaji Bruto Standar Pajak
+      pph21Sebulan // Potongan Pajak
+    };
   };
 
   // 2. EXPORT TEMPLATE EXCEL CERDAS
@@ -1496,7 +1596,7 @@ export default function ClientAdmin() {
     const templateData = activeEmps.map(emp => {
       const stats = calculateWorkStats(emp.id, payrollPeriod);
       const pd = typeof emp.personal_data === 'string' ? JSON.parse(emp.personal_data || '{}') : (emp.personal_data || {});
-      const gapok = Number(pd.gaji_terakhir?.replace(/[^0-9]/g, '')) || 0; 
+      const gapok = Number(employee.gaji_pokok) || 0; 
       
       let row = { "NIK": emp.nik_karyawan, "Nama_Pegawai": emp.nama_lengkap, "Gaji_Pokok": gapok };
 
@@ -1553,8 +1653,7 @@ export default function ClientAdmin() {
             }
           });
 
-          const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {});
-          const statusPTKP = pd.status_pernikahan || 'TK/0';
+          const gapok = Number(employee.gaji_pokok) || 0;
 
           const grossSalary = basicSalary + totalAdditions;
           const pph21 = calculatePPh21(grossSalary, statusPTKP);
@@ -1594,32 +1693,229 @@ export default function ClientAdmin() {
   };
 
   // 4. MANUAL INPUT (SINGLE)
-  const handleSelectEmployeeForPayroll = (empId) => {
-    const employee = employees.find(e => e.id === empId);
-    if (!employee) return setPayrollForm({ employee_id: '', basic_salary: 0, additions: [], deductions: [] });
+    const handleSelectEmployeeForPayroll = (empId) => { //[cite: 1]
+    const employee = employees.find(e => e.id === empId); //[cite: 1]
+    if (!employee) return setPayrollForm({ employee_id: '', basic_salary: 0, additions: [], deductions: [] }); //[cite: 1]
 
-    const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {});
-    const gapok = Number(pd.gaji_terakhir?.replace(/[^0-9]/g, '')) || 0; 
-    const stats = calculateWorkStats(employee.id, payrollPeriod);
-    let autoAdditions = [], autoDeductions = [];
+    const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {}); //[cite: 1]
+    const gapok = Number(employee.gaji_pokok) || 0;
+    const stats = calculateWorkStats(employee.id, payrollPeriod); //[cite: 1]
+    
+    let autoAdditions = [];
+    let autoDeductions = []; //[cite: 1]
 
-    // Auto-potongan keterlambatan & mangkir
-    if (stats.totalLateMinutes > 0 && penaltyRates.latePerMinute > 0) {
-      autoDeductions.push({ name: `Denda Telat (${stats.totalLateMinutes} Mnt)`, amount: stats.totalLateMinutes * penaltyRates.latePerMinute });
+    // Uang Lembur Otomatis (Rumus Depnaker: Upah Sejam = Gapok / 173)
+    if (stats.totalOvertimeHours > 0 && gapok > 0) {
+      const upahSejam = gapok / 173;
+      let totalUangLembur = 0;
+      
+      // Perhitungan tiering lembur (Simulasi flat untuk total jam)
+      const jamPertama = 1;
+      const sisaJam = stats.totalOvertimeHours - jamPertama;
+      totalUangLembur += (jamPertama * 1.5 * upahSejam);
+      if (sisaJam > 0) totalUangLembur += (sisaJam * 2 * upahSejam);
+
+      autoAdditions.push({ name: `Uang Lembur (${stats.totalOvertimeHours} Jam)`, amount: Math.round(totalUangLembur) });
     }
-    if (stats.totalMangkir > 0 && penaltyRates.absencePerDay > 0) {
-      autoDeductions.push({ name: `Potongan Mangkir (${stats.totalMangkir} Hari)`, amount: stats.totalMangkir * penaltyRates.absencePerDay });
+
+    // Denda Keterlambatan & Mangkir
+    if (stats.totalLateMinutes > 0 && penaltyRates.latePerMinute > 0) { //[cite: 1]
+      autoDeductions.push({ name: `Denda Telat (${stats.totalLateMinutes} Mnt)`, amount: stats.totalLateMinutes * penaltyRates.latePerMinute }); //[cite: 1]
+    }
+    if (stats.totalMangkir > 0 && penaltyRates.absencePerDay > 0) { //[cite: 1]
+      autoDeductions.push({ name: `Potongan Mangkir (${stats.totalMangkir} Hari)`, amount: stats.totalMangkir * penaltyRates.absencePerDay }); //[cite: 1]
     }
 
-    // ENTERPRISE FITUR: Auto-hitung Potongan BPJS Karyawan
-    if (gapok > 0) {
-      const bpjsKesehatan = Math.min(gapok * 0.01, 120000); // 1% (Maksimal batas upah 12jt)
-      const bpjsKetenagakerjaan = gapok * 0.03; // 2% JHT + 1% JP
-      autoDeductions.push({ name: 'BPJS Kesehatan (1%)', amount: bpjsKesehatan });
-      autoDeductions.push({ name: 'BPJS Ketenagakerjaan (3%)', amount: bpjsKetenagakerjaan });
-    }
+    // Generate Potongan BPJS via Engine Baru
+    const taxData = calculatePayrollTaxesAndBPJS(gapok, autoAdditions.reduce((a,b) => a + b.amount, 0), pd.status_pernikahan);
+    autoDeductions = [...autoDeductions, ...taxData.rincianPotonganBPJS];
 
-    setPayrollForm({ employee_id: empId, basic_salary: gapok, additions: autoAdditions, deductions: autoDeductions });
+    setPayrollForm({ employee_id: empId, basic_salary: gapok, additions: autoAdditions, deductions: autoDeductions }); //[cite: 1]
+  };
+
+  // FUNGSI PENGHITUNG REAL-TIME SAAT GAJI POKOK DIKETIK MANUAL
+  const handleBasicSalaryChange = (value) => {
+    const newSalary = Number(value) || 0;
+    
+    setPayrollForm(prev => {
+      const employee = employees.find(e => e.id === prev.employee_id);
+      if (!employee) return { ...prev, basic_salary: newSalary };
+
+      const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {});
+      const statusPTKP = pd.status_pernikahan || 'TK/0';
+      const stats = calculateWorkStats(employee.id, payrollPeriod);
+
+      // 1. Rekalkulasi Uang Lembur Otomatis
+      let updatedAdditions = [...prev.additions];
+      const otIndex = updatedAdditions.findIndex(a => a.name.includes('Lembur'));
+      
+      if (stats.totalOvertimeHours > 0 && newSalary > 0) {
+        const upahSejam = newSalary / 173;
+        let totalUangLembur = (1 * 1.5 * upahSejam);
+        if (stats.totalOvertimeHours > 1) totalUangLembur += ((stats.totalOvertimeHours - 1) * 2 * upahSejam);
+        
+        const otItem = { name: `Uang Lembur (${stats.totalOvertimeHours} Jam)`, amount: Math.round(totalUangLembur) };
+        if (otIndex >= 0) updatedAdditions[otIndex] = otItem;
+        else updatedAdditions.push(otItem);
+      } else if (otIndex >= 0) {
+        updatedAdditions.splice(otIndex, 1); 
+      }
+
+      // 2. Rekalkulasi Tarif BPJS (Kesehatan, JHT, JP)
+      const currentTotalAdds = updatedAdditions.reduce((sum, a) => sum + Number(a.amount || 0), 0);
+      const taxData = calculatePayrollTaxesAndBPJS(newSalary, currentTotalAdds, statusPTKP);
+
+      let updatedDeductions = [...prev.deductions];
+      
+      // Timpa nilai BPJS lama dengan perhitungan yang baru
+      taxData.rincianPotonganBPJS.forEach(newBpjs => {
+        // Deteksi dari 7 huruf awal (cth: "BPJS Ke", "BPJS JH", "BPJS JP")
+        const bpjsIndex = updatedDeductions.findIndex(d => d.name.includes(newBpjs.name.substring(0, 7))); 
+        if (bpjsIndex >= 0) {
+           updatedDeductions[bpjsIndex] = newBpjs;
+        } else {
+           updatedDeductions.push(newBpjs);
+        }
+      });
+
+      return { ...prev, basic_salary: newSalary, additions: updatedAdditions, deductions: updatedDeductions };
+    });
+  };
+
+  // FUNGSI SUPER: GENERATE PAYROLL SEMUA KARYAWAN OTOMATIS
+  const handleGenerateBulkPayroll = async () => {
+    if (!window.confirm(`Proses & Hitung otomatis Gaji untuk SEMUA KARYAWAN AKTIF pada periode ${payrollPeriod}?\n\n(Catatan: Data penggajian yang sudah ada di bulan ini akan diperbarui)`)) return;
+
+    try {
+      // Ambil hanya karyawan inti yang aktif
+      const activeEmps = employees.filter(e => e.status_pegawai !== 'NONAKTIF' && e.role !== 'Developer' && e.role !== 'Super Admin');
+      let successData = [];
+      let uniqueLocations = new Set();
+
+      for (const employee of activeEmps) {
+        const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {});
+        // Pastikan Gaji Pokok karyawan sudah diset di database, jika 0 lewati saja
+        const gapok = Number(employee.gaji_pokok) || 0; 
+        
+        if (gapok === 0) continue; 
+
+        const stats = calculateWorkStats(employee.id, payrollPeriod);
+        let autoAdditions = [];
+        let autoDeductions = [];
+
+        // 1. Kalkulasi Uang Lembur (Otomatis)
+        if (stats.totalOvertimeHours > 0) {
+          const upahSejam = gapok / 173;
+          let totalUangLembur = (1 * 1.5 * upahSejam); 
+          if (stats.totalOvertimeHours > 1) totalUangLembur += ((stats.totalOvertimeHours - 1) * 2 * upahSejam);
+          autoAdditions.push({ name: `Uang Lembur (${stats.totalOvertimeHours} Jam)`, amount: Math.round(totalUangLembur) });
+        }
+
+        // 2. Kalkulasi Denda (Otomatis)
+        if (stats.totalLateMinutes > 0 && penaltyRates.latePerMinute > 0) {
+          autoDeductions.push({ name: `Denda Telat (${stats.totalLateMinutes} Mnt)`, amount: stats.totalLateMinutes * penaltyRates.latePerMinute });
+        }
+        if (stats.totalMangkir > 0 && penaltyRates.absencePerDay > 0) {
+          autoDeductions.push({ name: `Potongan Mangkir (${stats.totalMangkir} Hari)`, amount: stats.totalMangkir * penaltyRates.absencePerDay });
+        }
+
+        // 3. Kalkulasi Pajak TER & BPJS (Otomatis)
+        const totalAdditions = autoAdditions.reduce((sum, a) => sum + a.amount, 0);
+        const statusPTKP = pd.status_pernikahan || 'TK/0';
+        const taxData = calculatePayrollTaxesAndBPJS(gapok, totalAdditions, statusPTKP);
+        
+        autoDeductions = [...autoDeductions, ...taxData.rincianPotonganBPJS];
+
+        // 4. Kalkulasi Netto (Otomatis)
+        const totalDeductions = autoDeductions.reduce((sum, d) => sum + d.amount, 0);
+        const grossSalary = gapok + totalAdditions;
+        const netSalary = grossSalary - totalDeductions - taxData.pph21Sebulan;
+
+        successData.push({
+          client_id: currentUser.client_id,
+          employee_id: employee.id,
+          period: payrollPeriod, period_month: payrollPeriod,
+          basic_salary: gapok, total_work_days: stats.totalDays, total_work_hours: stats.totalHours,
+          additions: autoAdditions, deductions: autoDeductions,
+          gross_salary: grossSalary, tax_pph21: taxData.pph21Sebulan, net_salary: netSalary, 
+          company_bpjs_expense: taxData.totalBebanBPJSPerusahaan,
+          status: 'LUNAS'
+        });
+
+        uniqueLocations.add(employee.lokasi_penempatan);
+      }
+
+      // 5. Eksekusi Penyimpanan ke Database Massal
+      if (successData.length > 0) {
+        await supabase.from('payrolls').delete().eq('client_id', currentUser.client_id).eq('period', payrollPeriod);
+        const { error } = await supabase.from('payrolls').insert(successData);
+        if (error) throw error;
+
+        // Auto-Generate Tagihan & Sinkronisasi Arus Kas
+        for (const lokasi of uniqueLocations) {
+          await syncPayrollToCashflow(payrollPeriod, lokasi);
+        }
+        alert(`Selesai! Berhasil memproses gaji ${successData.length} Karyawan secara otomatis.\n\n(Catatan: Karyawan yang Gaji Pokoknya masih 0 di Database dilewati)`);
+        fetchAllData();
+      } else {
+        alert("Tidak ada karyawan yang diproses. Pastikan Kolom 'Gaji Pokok' di Database Karyawan tidak kosong / Rp 0.");
+      }
+
+    } catch (err) {
+      alert("Gagal memproses otomatis: " + err.message);
+    }
+  };
+
+  const handleSaveManualPayroll = async (e) => { //[cite: 1]
+    e.preventDefault(); //[cite: 1]
+    if (!payrollForm.employee_id) return alert("Pilih karyawan!"); //[cite: 1]
+    
+    try {
+      const employee = employees.find(emp => emp.id === payrollForm.employee_id); //[cite: 1]
+      const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {}); //[cite: 1]
+      const stats = calculateWorkStats(employee.id, payrollPeriod); //[cite: 1]
+
+      const totalAdditions = payrollForm.additions.reduce((sum, item) => sum + Number(item.amount || 0), 0); //[cite: 1]
+      const basicSalary = Number(payrollForm.basic_salary || 0); //[cite: 1]
+      const grossTakeHome = basicSalary + totalAdditions;
+      
+      // Tarik engine pajak TER
+      const taxData = calculatePayrollTaxesAndBPJS(basicSalary, totalAdditions, pd.status_pernikahan || 'TK/0');
+      
+      // Potongan manual/sistem yang BUKAN BPJS (contoh: Kasbon, Denda)
+      const nonBpjsDeductions = payrollForm.deductions.filter(d => !d.name.includes('BPJS')).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      
+      const totalPengurangTakeHome = nonBpjsDeductions + taxData.totalPotonganBPJSKaryawan + taxData.pph21Sebulan;
+      const netSalary = grossTakeHome - totalPengurangTakeHome; //[cite: 1]
+
+      const payload = {
+        client_id: currentUser.client_id, //[cite: 1]
+        employee_id: employee.id, //[cite: 1]
+        period: payrollPeriod, period_month: payrollPeriod, //[cite: 1]
+        basic_salary: basicSalary, //[cite: 1]
+        total_work_days: stats.totalDays, //[cite: 1]
+        total_work_hours: stats.totalHours, //[cite: 1]
+        additions: payrollForm.additions.filter(a => a.name.trim() !== ''), //[cite: 1]
+        deductions: payrollForm.deductions.filter(d => d.name.trim() !== ''), //[cite: 1]
+        gross_salary: grossTakeHome, //[cite: 1]
+        tax_pph21: taxData.pph21Sebulan, //[cite: 1]
+        net_salary: netSalary, //[cite: 1]
+        company_bpjs_expense: taxData.totalBebanBPJSPerusahaan, // [SIMPAN BEBAN ASLI PERUSAHAAN]
+        status: 'LUNAS' //[cite: 1]
+      };
+
+      await supabase.from('payrolls').delete().eq('employee_id', employee.id).eq('period', payrollPeriod); //[cite: 1]
+      const { error: payrollError } = await supabase.from('payrolls').insert([payload]); //[cite: 1]
+      if (payrollError) throw new Error(payrollError.message); //[cite: 1]
+
+      await syncPayrollToCashflow(payrollPeriod, employee.lokasi_penempatan); //[cite: 1]
+
+      alert(`Berhasil! Gaji ${employee.nama_lengkap} tersimpan dengan Pajak TER 2024 dan Kalkulasi BPJS akurat.`); //[cite: 1]
+      setIsPayrollModalOpen(false); //[cite: 1]
+      fetchAllData(); //[cite: 1]
+    } catch (err) {
+      alert("Terjadi Kesalahan Sistem: " + err.message); //[cite: 1]
+    }
   };
 
   const handleAddPayrollComponent = (type) => setPayrollForm(prev => ({ ...prev, [type]: [...prev[type], { name: '', amount: 0 }] }));
@@ -1631,104 +1927,98 @@ export default function ClientAdmin() {
   };
 
   // ==========================================
-  // FITUR ENTERPRISE: KONSOLIDASI ARUS KAS GAJI
+  // KONSOLIDASI ARUS KAS & AUTO-INVOICE ENTERPRISE
   // ==========================================
-  const syncPayrollToCashflow = async (period, lokasiPenempatan) => {
+  const syncPayrollToCashflow = async (period, lokasiPenempatan) => { //[cite: 1]
     try {
-      // 1. Ambil semua karyawan di lokasi/klien ini
-      const { data: emps } = await supabase.from('employees')
-        .select('id').eq('lokasi_penempatan', lokasiPenempatan).eq('client_id', currentUser.client_id);
+      const { data: emps } = await supabase.from('employees') //[cite: 1]
+        .select('id').eq('lokasi_penempatan', lokasiPenempatan).eq('client_id', currentUser.client_id); //[cite: 1]
       
-      if (!emps || emps.length === 0) return;
-      const empIds = emps.map(e => e.id);
+      if (!emps || emps.length === 0) return; //[cite: 1]
+      const empIds = emps.map(e => e.id); //[cite: 1]
 
-      // 2. Ambil semua data gaji mereka di bulan tersebut
-      const { data: pays } = await supabase.from('payrolls')
-        .select('net_salary').eq('period', period).in('employee_id', empIds);
+      // Ambil Netto, Beban BPJS Perusahaan, dan PPh 21 dari Database Payroll
+      const { data: pays } = await supabase.from('payrolls') //[cite: 1]
+        .select('net_salary, tax_pph21, company_bpjs_expense, deductions').eq('period', period).in('employee_id', empIds); //[cite: 1]
 
-      // 3. Jumlahkan total seluruh Gaji Bersih
-      const totalNet = pays ? pays.reduce((sum, p) => sum + p.net_salary, 0) : 0;
+      if (!pays || pays.length === 0) return;
 
-      // 4. Buat Kode Referensi Unik per Lokasi & Periode (Agar tidak dobel/ter-replace)
-      const safeLokasi = (lokasiPenempatan || 'Pusat').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-      const refNumber = `PAYROLL-${safeLokasi}-${period}`;
+      let totalExpensePerusahaan = 0;
+      
+      // Total Pengeluaran Kas Asli Perusahaan = Gaji Bersih Karyawan + Seluruh Hutang Pajak Negara + Seluruh Tagihan BPJS Ketenagakerjaan & Kesehatan
+      pays.forEach(p => {
+        // Cari total BPJS Karyawan di dalam JSON Deductions
+        const potonganBpjsKaryawan = p.deductions.filter(d => d.name.includes('BPJS')).reduce((sum, item) => sum + item.amount, 0);
+        
+        const totalTagihanBPJS = p.company_bpjs_expense + potonganBpjsKaryawan;
+        totalExpensePerusahaan += (p.net_salary + p.tax_pph21 + totalTagihanBPJS);
+      });
 
-      if (totalNet === 0) {
-         // Jika total 0 (mungkin datanya dihapus semua), hapus jurnal kas
-         await supabase.from('cashflows').delete().eq('reference_number', refNumber).eq('client_id', currentUser.client_id);
-         return;
-      }
+      const safeLokasi = (lokasiPenempatan || 'Pusat').replace(/[^a-zA-Z0-9]/g, '').toUpperCase(); //[cite: 1]
+      const refNumber = `PYRL-EXP-${safeLokasi}-${period}`; //[cite: 1]
 
-      // 5. Cek apakah Jurnal Kas untuk Cabang & Bulan ini sudah pernah dibuat
-      const { data: existingCf } = await supabase.from('cashflows')
-        .select('id').eq('reference_number', refNumber).eq('client_id', currentUser.client_id).maybeSingle();
-
-      const cfPayload = {
-        client_id: currentUser.client_id,
-        type: 'EXPENSE',
-        category: `Gaji Karyawan (${lokasiPenempatan || 'Pusat'})`,
-        amount: totalNet,
-        date: new Date().toISOString().split('T')[0],
-        transaction_date: new Date().toISOString().split('T')[0],
-        description: `Total Gaji periode ${period} untuk ${pays.length} karyawan di ${lokasiPenempatan || 'Pusat'}`,
-        reference_number: refNumber
+      const cfPayload = { //[cite: 1]
+        client_id: currentUser.client_id, //[cite: 1]
+        type: 'EXPENSE', //[cite: 1]
+        category: `Beban Gaji & Operasional (${lokasiPenempatan || 'Pusat'})`, //[cite: 1]
+        amount: totalExpensePerusahaan, //[cite: 1]
+        date: new Date().toISOString().split('T')[0], //[cite: 1]
+        transaction_date: new Date().toISOString().split('T')[0], //[cite: 1]
+        description: `Beban Netto, Pajak PPh21, & BPJS untuk ${pays.length} personil di area ${lokasiPenempatan || 'Pusat'}`, //[cite: 1]
+        reference_number: refNumber //[cite: 1]
       };
 
-      // 6. REPLACE (Update) jika sudah ada, atau INSERT jika baru
-      if (existingCf) {
-         await supabase.from('cashflows').update(cfPayload).eq('id', existingCf.id);
-      } else {
-         await supabase.from('cashflows').insert([cfPayload]);
+      // UPDATE / INSERT Jurnal Kas
+      const { data: existingCf } = await supabase.from('cashflows').select('id').eq('reference_number', refNumber).maybeSingle(); //[cite: 1]
+      if (existingCf) await supabase.from('cashflows').update(cfPayload).eq('id', existingCf.id); //[cite: 1]
+      else await supabase.from('cashflows').insert([cfPayload]); //[cite: 1]
+
+      // -------------------------------------------------------------
+      // AUTOMATISASI INVOICE (PROJECT-BASED BILLING TO CLIENT)
+      // -------------------------------------------------------------
+      // Pemicu: Jika Payroll bukan di "Pusat", buatkan draft tagihan untuk Klien tersebut.
+      if (lokasiPenempatan && lokasiPenempatan !== 'Pusat' && lokasiPenempatan !== 'Belum Ditentukan') {
+       const invRefNumber = `INV-AUTO-${safeLokasi}-${period}`;
+       const { data: existingInv } = await supabase.from('invoices').select('id').eq('invoice_number', invRefNumber).maybeSingle();
+
+       if (!existingInv) {
+          // Tarik Management Fee khusus Klien ini
+          const clientData = clientsList.find(c => c.name === lokasiPenempatan) || { management_fee: 10 };
+          const specificFeeRate = clientData.management_fee;
+
+          // Hitung fee dinamis
+          const managementFeeValue = totalExpensePerusahaan * (specificFeeRate / 100);
+          
+          const autoInvoiceItems = [
+             { desc: `Tagihan Tenaga Kerja/Security Periode ${period}`, qty: 1, price: totalExpensePerusahaan },
+             { desc: `Management Fee Jasa (${specificFeeRate}%)`, qty: 1, price: managementFeeValue }
+          ];
+
+            const totalTagihanKlien = totalExpensePerusahaan + managementFeeValue;
+            // Asumsi PPN 11% ditambahkan di atas Tagihan Jasa
+            const taxAmountPPN = totalTagihanKlien * 0.11; 
+
+            const invPayload = {
+              client_id: currentUser.client_id, //[cite: 1]
+              invoice_number: invRefNumber, //[cite: 1]
+              client_name: lokasiPenempatan, // Auto assign nama cabang menjadi nama Klien Penagihan[cite: 1]
+              date: new Date().toISOString().split('T')[0], //[cite: 1]
+              due_date: new Date(new Date().setDate(new Date().getDate() + 14)).toISOString().split('T')[0], // Jatuh tempo 14 hari
+              items: JSON.stringify(autoInvoiceItems), //[cite: 1]
+              subtotal: totalTagihanKlien, //[cite: 1]
+              tax_rate: 11, //[cite: 1]
+              tax_amount: taxAmountPPN, //[cite: 1]
+              discount: 0, //[cite: 1]
+              total: totalTagihanKlien + taxAmountPPN, //[cite: 1]
+              status: 'UNPAID', //[cite: 1]
+              notes: 'Generated Automatis oleh Sistem Payroll Enterprise Vanda Tech.' //[cite: 1]
+            };
+
+            await supabase.from('invoices').insert([invPayload]); //[cite: 1]
+        }
       }
     } catch (err) {
-      console.error("Gagal sinkronisasi arus kas:", err);
-    }
-  };
-
-  const handleSaveManualPayroll = async (e) => {
-    e.preventDefault();
-    if (!payrollForm.employee_id) return alert("Pilih karyawan!");
-    
-    try {
-      const employee = employees.find(emp => emp.id === payrollForm.employee_id);
-      if (!employee) return alert("Error: Data karyawan tidak ditemukan!");
-      const stats = calculateWorkStats(employee.id, payrollPeriod);
-
-      const pd = typeof employee.personal_data === 'string' ? JSON.parse(employee.personal_data || '{}') : (employee.personal_data || {});
-      const statusPTKP = pd.status_pernikahan || 'TK/0';
-
-      const totalAdditions = payrollForm.additions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const totalDeductions = payrollForm.deductions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const basicSalary = Number(payrollForm.basic_salary || 0);
-      const grossSalary = basicSalary + totalAdditions;
-      const pph21 = calculatePPh21(grossSalary, statusPTKP); 
-      const netSalary = grossSalary - totalDeductions - pph21;
-
-      const payload = {
-        client_id: currentUser.client_id, 
-        employee_id: employee.id, 
-        period: payrollPeriod, period_month: payrollPeriod,
-        basic_salary: basicSalary, total_work_days: stats.totalDays, total_work_hours: stats.totalHours,
-        additions: payrollForm.additions.filter(a => a.name.trim() !== ''), 
-        deductions: payrollForm.deductions.filter(d => d.name.trim() !== ''),
-        gross_salary: grossSalary, tax_pph21: pph21, net_salary: netSalary, status: 'LUNAS'
-      };
-
-      // 1. Simpan ke database Payroll
-      await supabase.from('payrolls').delete().eq('employee_id', employee.id).eq('period', payrollPeriod);
-      const { error: payrollError } = await supabase.from('payrolls').insert([payload]);
-      
-      if (payrollError) throw new Error("Gagal menyimpan ke tabel Payroll: " + payrollError.message);
-
-      // 2. Panggil fungsi Konsolidator Kas yang baru dibuat!
-      await syncPayrollToCashflow(payrollPeriod, employee.lokasi_penempatan);
-
-      alert(`Berhasil! Gaji ${employee.nama_lengkap} tersimpan. Saldo Arus Kas untuk divisi/cabang terkait telah dihitung ulang secara otomatis.`);
-      setIsPayrollModalOpen(false); 
-      fetchAllData(); 
-
-    } catch (err) {
-      alert("Terjadi Kesalahan Sistem: " + err.message);
+      console.error("Gagal konsolidasi Arus Kas & Invoice:", err); //[cite: 1]
     }
   };
 
@@ -2121,7 +2411,8 @@ export default function ClientAdmin() {
 
     const payload = {
       nik_karyawan, nama_lengkap, bidang_jasa, posisi_jabatan,
-      lokasi_penempatan, status_pegawai, role, personal_data
+      lokasi_penempatan, status_pegawai, role, personal_data,
+      gaji_pokok: Number(empForm.gaji_pokok) || 0 // <-- Tambahkan baris ini
     };
 
     const { error } = await supabase.from('employees').update(payload).eq('id', id);
@@ -2323,9 +2614,15 @@ export default function ClientAdmin() {
   // ==========================================
   const handleSaveClient = async (e) => {
     e.preventDefault();
-    // Generate slug otomatis dari nama cabang
     const generatedSlug = clientForm.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-    const payload = { name: clientForm.name, slug: generatedSlug, status: clientForm.status };
+    const payload = { 
+      name: clientForm.name, 
+      slug: generatedSlug, 
+      status: clientForm.status,
+      cutoff_start: Number(clientForm.cutoff_start),
+      cutoff_end: Number(clientForm.cutoff_end),
+      management_fee: Number(clientForm.management_fee)
+    };
     
     if (clientForm.id) {
       const { error } = await supabase.from('clients').update(payload).eq('id', clientForm.id);
@@ -3398,14 +3695,19 @@ export default function ClientAdmin() {
                       <div className="flex flex-wrap gap-2 w-full md:w-auto">
                         {hasPermission('finance', 'export') && (
                           <button onClick={downloadTemplatePayroll} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2 flex-1 md:flex-none justify-center">
-                             Unduh Template Excel
+                            Unduh Template Excel
                           </button>
                         )}
                         {hasPermission('finance', 'create') && (
                           <>
+                            {/* TOMBOL SAKTI: GENERATE MASSAL */}
+                            <button onClick={handleGenerateBulkPayroll} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 flex-1 md:flex-none justify-center">
+                              <Activity size={14}/> Generate Otomatis Semua
+                            </button>
+
                             <input type="file" accept=".xlsx, .xls" ref={importPayrollRef} onChange={handleImportPayroll} className="hidden" />
-                            <button onClick={() => importPayrollRef.click()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 flex-1 md:flex-none justify-center">
-                               <RefreshCw size={14}/> Import Data Excel
+                            <button onClick={() => importPayrollRef.current.click()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 flex-1 md:flex-none justify-center">
+                              <RefreshCw size={14}/> Import Data Excel
                             </button>
                             <button onClick={() => {
                               setPayrollForm({ employee_id: '', basic_salary: 0, additions: [], deductions: [] });
@@ -4384,7 +4686,10 @@ export default function ClientAdmin() {
                         <p className="text-xs text-blue-700 mt-1">Buat Cabang Klien, lalu tambahkan titik lokasi (Geo-Fencing) di dalam cabang tersebut.</p>
                       </div>
                       {hasPermission('settings', 'edit') && (
-                        <button onClick={() => { setClientForm({ id: null, name: '', status: 'ACTIVE' }); setIsClientModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-2 shrink-0">
+                        <button onClick={() => { 
+                          setClientForm({ id: null, name: '', status: 'ACTIVE', cutoff_start: 21, cutoff_end: 20, management_fee: 10 }); 
+                          setIsClientModalOpen(true); 
+                        }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-2 shrink-0">
                           <Plus size={16}/> Tambah Cabang Klien
                         </button>
                       )}
@@ -4399,7 +4704,19 @@ export default function ClientAdmin() {
                           </h3>
                           {hasPermission('settings', 'edit') && (
                             <div className="flex gap-2">
-                               <button onClick={() => { setClientForm({ id: client.id, name: client.name, status: client.status }); setIsClientModalOpen(true); }} className="text-slate-500 hover:text-blue-600 text-xs font-bold bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm">Edit Cabang</button>
+                               <button onClick={() => { 
+                                setClientForm({ 
+                                  id: client.id, 
+                                  name: client.name, 
+                                  status: client.status,
+                                  cutoff_start: client.cutoff_start || 21,
+                                  cutoff_end: client.cutoff_end || 20,
+                                  management_fee: client.management_fee || 10
+                                }); 
+                                setIsClientModalOpen(true); 
+                              }} className="text-slate-500 hover:text-blue-600 text-xs font-bold bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm">
+                                Edit Cabang
+                              </button>
                                <button onClick={() => { setLocationForm({ id: null, client_id: client.id, name: '', latitude: '', longitude: '', radius: 50 }); setIsLocationModalOpen(true); }} className="bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1">
                                  <Plus size={14}/> Tambah Titik di Sini
                                </button>
@@ -4702,7 +5019,6 @@ export default function ClientAdmin() {
                 <button onClick={() => setIsAccessModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
               </div>
               <div className="p-6 space-y-6 overflow-y-auto max-h-[60vh] custom-scrollbar">
-                {/* Otoritas Menu Mobile App */}
                 <div>
                   <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Akses Menu dashboard admin</h4>
                   <div className="space-y-2">
@@ -4710,17 +5026,14 @@ export default function ClientAdmin() {
                       <span className="text-sm font-bold text-slate-700">Laporan Reguler</span>
                       <input type="checkbox" checked={editPermissions.reguler} onChange={(e) => setEditPermissions({...editPermissions, reguler: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300" />
                     </label>
-                    
                     <label className="flex items-center justify-between p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
                       <span className="text-sm font-bold text-slate-700">Laporan Patroli</span>
                       <input type="checkbox" checked={editPermissions.patroli} onChange={(e) => setEditPermissions({...editPermissions, patroli: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300" />
                     </label>
-
                     <label className="flex items-center justify-between p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
                       <span className="text-sm font-bold text-slate-700">Reimbursement</span>
                       <input type="checkbox" checked={editPermissions.reimburse} onChange={(e) => setEditPermissions({...editPermissions, reimburse: e.target.checked})} className="w-5 h-5 text-blue-600 rounded-md border-slate-300" />
                     </label>
-
                     {customMenus.map(menu => (
                       <label key={`dash_${menu.id}`} className="flex items-center justify-between p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
                         <span className="text-sm font-bold text-slate-700 truncate mr-2" title={`Akses Data: ${menu.menu_name}`}>Laporan: {menu.menu_name}</span>
@@ -4729,15 +5042,12 @@ export default function ClientAdmin() {
                     ))}
                   </div>
                 </div>
-
-                {/* Otoritas Menu Mobile App (Override Perorangan) */}
                 <div>
                   <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Override Menu Mobile App</h4>
                   <div className="grid grid-cols-2 gap-2">
-                    {/* GABUNGKAN ARRAY MENU BAWAAN DAN MENU CUSTOM */}
                     {['absen', 'laporan', 'pengajuan', 'task', 'slip', ...customMenus.map(m => `custom_${m.id}`)]
-                            .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) 
-                            .map(menu => {
+                      .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) 
+                      .map(menu => {
                       let isChecked = false;
                       if (editPermissions?.mobile && editPermissions.mobile[menu] !== undefined) {
                          isChecked = editPermissions.mobile[menu];
@@ -4749,14 +5059,11 @@ export default function ClientAdmin() {
                            isChecked = perms?.mobile?.[menu] || false;
                          }
                       }
-
-                      // Penamaan Label Dinamis
                       let labelText = `Menu ${menu}`;
                       if (menu.startsWith('custom_')) {
                         const mObj = customMenus.find(m => `custom_${m.id}` === menu);
                         labelText = mObj ? mObj.menu_name : 'Custom Menu';
                       }
-
                       return (
                       <label key={menu} className="flex items-center gap-2 p-2.5 border border-slate-100 bg-slate-50 hover:bg-blue-50 rounded-xl cursor-pointer transition-colors">
                         <input type="checkbox" checked={isChecked} onChange={(e) => setEditPermissions({...editPermissions, mobile: {...(editPermissions.mobile || {}), [menu]: e.target.checked}})} className="w-4 h-4 text-blue-600 rounded border-slate-300 shrink-0" />
@@ -4765,8 +5072,6 @@ export default function ClientAdmin() {
                     )})}
                   </div>
                 </div>
-
-                {/* Otoritas Khusus */}
                 <div>
                   <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Otoritas Khusus</h4>
                   <label className="flex items-center justify-between p-3 border border-amber-200 bg-amber-50/50 rounded-xl cursor-pointer transition-colors">
@@ -4774,7 +5079,6 @@ export default function ClientAdmin() {
                       <span className="text-sm font-bold text-amber-900 block">Bypass Area GPS Absensi</span>
                       <span className="text-[10px] text-amber-700 leading-tight block mt-0.5">Bisa absen dari lokasi mana saja tanpa terblokir radius.</span>
                     </div>
-                    {/* Perbaikan onChange pada checkbox GPS */}
                     <input type="checkbox" checked={editPermissions.bebas_gps} onChange={(e) => setEditPermissions({...editPermissions, bebas_gps: e.target.checked})} className="w-5 h-5 text-amber-600 rounded-md border-amber-300" />
                   </label>
                 </div>
@@ -4789,23 +5093,53 @@ export default function ClientAdmin() {
         {/* 3. MODAL TAMBAH/EDIT CABANG (MENGGUNAKAN TABEL CLIENTS) */}
         {isClientModalOpen && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex justify-center items-center p-4">
-            <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
+            <div className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
               <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><Building size={20} className="text-blue-600"/> {clientForm.id ? 'Edit Cabang' : 'Cabang Klien Baru'}</h3>
+                <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><Building size={20} className="text-blue-600"/> {clientForm.id ? 'Edit Cabang/Klien' : 'Cabang Klien Baru'}</h3>
                 <button type="button" onClick={() => setIsClientModalOpen(false)} className="p-2 bg-slate-200 text-slate-600 rounded-full hover:bg-slate-300"><X size={16}/></button>
               </div>
+              
               <form onSubmit={handleSaveClient} className="flex flex-col">
-                <div className="p-6 bg-white">
-                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Nama Cabang / Klien</label>
-                  <input required type="text" placeholder="Cth: PT Klien Maju Mundur" value={clientForm.name} onChange={e => setClientForm({...clientForm, name: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
+                <div className="p-6 bg-white space-y-4 max-h-[70vh] overflow-y-auto custom-scrollbar">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Nama Cabang / Klien</label>
+                    <input required type="text" placeholder="Cth: PT Klien Maju Mundur" value={clientForm.name} onChange={e => setClientForm({...clientForm, name: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
+                  </div>
+
+                  <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100 space-y-3">
+                    <p className="text-[10px] font-black text-blue-800 uppercase tracking-widest flex items-center gap-1.5 border-b border-blue-100 pb-2"><Clock size={14}/> Pengaturan Cut-Off Absensi</p>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-blue-600 mb-1">Mulai Tgl (Bulan Sebelumnya)</label>
+                        <input required type="number" min="1" max="31" value={clientForm.cutoff_start} onChange={e => setClientForm({...clientForm, cutoff_start: e.target.value})} className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm font-bold bg-white outline-none focus:border-blue-500"/>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-blue-600 mb-1">Sampai Tgl (Bulan Berjalan)</label>
+                        <input required type="number" min="1" max="31" value={clientForm.cutoff_end} onChange={e => setClientForm({...clientForm, cutoff_end: e.target.value})} className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm font-bold bg-white outline-none focus:border-blue-500"/>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-emerald-50/50 p-4 rounded-xl border border-emerald-100">
+                    <p className="text-[10px] font-black text-emerald-800 uppercase tracking-widest flex items-center gap-1.5 border-b border-emerald-100 pb-2 mb-3"><Receipt size={14}/> Pengaturan Tagihan (Invoice)</p>
+                    <div>
+                      <label className="block text-[10px] font-bold text-emerald-600 mb-1">Management Fee Jasa (%)</label>
+                      <div className="relative">
+                        <input required type="number" step="any" min="0" placeholder="10" value={clientForm.management_fee} onChange={e => setClientForm({...clientForm, management_fee: e.target.value})} className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm font-bold bg-white outline-none focus:border-emerald-500 pr-10"/>
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 font-black text-emerald-500">%</span>
+                      </div>
+                      <p className="text-[9px] text-emerald-600 mt-1 italic">*Nilai ini otomatis ditambahkan ke pengeluaran gaji saat sistem membuat Draft Invoice.</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-between gap-3">
+
+                <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-between gap-3 shrink-0">
                   {clientForm.id ? (
                      <button type="button" onClick={() => handleDeleteClient(clientForm.id)} className="px-4 py-3 text-rose-500 hover:bg-rose-100 rounded-xl font-bold text-sm transition-colors">Hapus</button>
                   ) : <div></div>}
                   <div className="flex gap-2">
                     <button type="button" onClick={() => setIsClientModalOpen(false)} className="px-5 py-3 text-slate-500 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Batal</button>
-                    <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20">Simpan</button>
+                    <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20">Simpan Konfigurasi</button>
                   </div>
                 </div>
               </form>
@@ -4864,8 +5198,6 @@ export default function ClientAdmin() {
         {isEmpDetailOpen && empForm && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex justify-center items-center p-4">
             <div className="bg-slate-50 w-full max-w-5xl max-h-[90vh] rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300 relative border border-slate-200">
-              
-              {/* Header ala Screenshot */}
               <div className="px-8 py-5 border-b border-slate-200 flex justify-between items-center bg-white shrink-0">
                 <div>
                   <h3 className="font-black text-xl text-slate-800 uppercase tracking-tight">HRIS RECORD: {empForm.nama_lengkap}</h3>
@@ -4882,7 +5214,6 @@ export default function ClientAdmin() {
                 </div>
               </div>
 
-              {/* Form Content */}
               <form onSubmit={handleSaveEmployeeDetail} className="flex flex-col flex-1 overflow-hidden">
                 <div className="p-6 md:p-8 overflow-y-auto flex-1 custom-scrollbar space-y-6">
                   
@@ -4902,6 +5233,10 @@ export default function ClientAdmin() {
                         <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl min-w-[120px]">
                            <p className="text-[9px] font-black text-indigo-600 uppercase">Status Kontrak</p>
                            <p className="font-bold text-indigo-700 text-sm mt-1">{empForm.personal_data.status_kontrak || 'PKWT'}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-black text-emerald-600 uppercase mb-1">Gaji Pokok (Saat Ini)</p>
+                          <p className="font-black text-slate-800 text-sm">{formatRupiah(empForm.gaji_pokok)}</p>
                         </div>
                         <div className={`p-3 rounded-xl min-w-[120px] border ${empForm.status_pegawai === 'NONAKTIF' ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'}`}>
                            <p className={`text-[9px] font-black uppercase ${empForm.status_pegawai === 'NONAKTIF' ? 'text-rose-600' : 'text-emerald-600'}`}>Status Pegawai</p>
@@ -4926,8 +5261,10 @@ export default function ClientAdmin() {
                                <option value="PKWT">PKWT (Kontrak)</option><option value="PKWTT">PKWTT (Tetap)</option><option value="Harian">Harian Lepas</option><option value="Freelance">Freelance</option>
                             </select>
                          </div>
-
-                         {/* TOMBOL NON-AKTIFKAN KARYAWAN (CABUT AKSES) */}
+                         <div className="col-span-2 lg:col-span-5 pt-3">
+                           <label className="block text-[10px] font-bold text-emerald-600 mb-1">Gaji Pokok Karyawan (Input untuk Otomatisasi Payroll)</label>
+                           <input type="number" placeholder="Cth: 5000000" value={empForm.gaji_pokok || ''} onChange={e => setEmpForm({...empForm, gaji_pokok: e.target.value})} className="w-full p-2 border border-emerald-200 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 outline-none focus:border-emerald-500"/>
+                         </div>
                          <div className="col-span-2 lg:col-span-5 pt-3 border-t border-slate-100 mt-2 flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-200/50">
                             <div>
                                <p className="text-xs font-bold text-slate-800">Manajemen Akses Karyawan</p>
@@ -4951,11 +5288,7 @@ export default function ClientAdmin() {
 
                   {/* GRID KARTU DETAIL */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    
-                    {/* KOLOM KIRI */}
                     <div className="space-y-6">
-                      
-                      {/* KARTU 1: IDENTITAS PRIBADI */}
                       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                         <h4 className="font-black text-slate-800 text-sm mb-4">1. IDENTITAS PRIBADI</h4>
                         <div className="space-y-3">
@@ -4982,7 +5315,6 @@ export default function ClientAdmin() {
                         </div>
                       </div>
 
-                      {/* KARTU 2: KELUARGA & DARURAT */}
                       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                         <h4 className="font-black text-slate-800 text-sm mb-4">2. KELUARGA & DARURAT</h4>
                         <div className="bg-indigo-50/50 rounded-xl p-4 flex justify-between items-center mb-4 border border-indigo-100">
@@ -5005,13 +5337,9 @@ export default function ClientAdmin() {
                            )}
                         </div>
                       </div>
-
                     </div>
 
-                    {/* KOLOM KANAN */}
                     <div className="space-y-6">
-                      
-                      {/* KARTU 4: FISIK & MEDIS */}
                       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                         <h4 className="font-black text-slate-800 text-sm mb-4">4. FISIK & MEDIS</h4>
                         <div className="grid grid-cols-2 gap-3 mb-4">
@@ -5045,7 +5373,6 @@ export default function ClientAdmin() {
                         </div>
                       </div>
 
-                      {/* KARTU 5: PELATIHAN & KARIR */}
                       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
                         <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-400"></div>
                         <h4 className="font-black text-slate-800 text-sm mb-4">5. KOMPETENSI & KARIR</h4>
@@ -5069,12 +5396,10 @@ export default function ClientAdmin() {
                           )}
                         </div>
                       </div>
-
                     </div>
                   </div>
                 </div>
 
-                {/* Footer Save Area */}
                 {empDetailMode === 'edit' && (
                   <div className="p-5 border-t border-slate-200 bg-white flex justify-end shrink-0">
                     <button type="submit" className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 flex items-center gap-2 transition-transform hover:-translate-y-0.5"><Check size={18}/> Simpan Perubahan Data</button>
@@ -5095,8 +5420,6 @@ export default function ClientAdmin() {
               </div>
               <form onSubmit={handleSaveRole} className="flex flex-col flex-1 overflow-hidden">
                 <div className="p-6 space-y-6 overflow-y-auto bg-white flex-1 custom-scrollbar">
-                  
-                  {/* Nama Role */}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Nama Jabatan / Role</label>
@@ -5107,8 +5430,6 @@ export default function ClientAdmin() {
                       <input type="text" placeholder="Cth: Mengelola approval keuangan..." value={roleForm.description} onChange={e => setRoleForm({...roleForm, description: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-indigo-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
                     </div>
                   </div>
-
-                  {/* Matriks Hak Akses */}
                   <div>
                     <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest border-b border-slate-200 pb-2 mb-4">Matriks Hak Akses Dashboard Admin</h4>
                     <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm mb-6">
@@ -5126,22 +5447,16 @@ export default function ClientAdmin() {
                         <tbody className="divide-y divide-slate-100 text-sm font-semibold text-slate-700">
                           {menuModules
                             .filter(m => m.id !== 'mobile')
-                            .filter(m => currentUser?.features?.[m.id] !== false) // <-- Proteksi Super Admin
+                            .filter(m => currentUser?.features?.[m.id] !== false) 
                             .map(module => (
                             <tr key={module.id} className="hover:bg-indigo-50/30 transition-colors">
                               <td className="px-4 py-3 border-r border-slate-100 bg-slate-50/50">{module.label}</td>
-                              
-                              {/* KOLOM LIHAT (VIEW) */}
                               <td className="px-4 py-3 text-center">
                                 {module.actions.includes('view') ? <input type="checkbox" checked={roleForm.permissions[module.id]?.view || false} onChange={() => handleCheckboxChange(module.id, 'view')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
                               </td>
-                              
-                              {/* KOLOM BUAT (CREATE) */}
                               <td className="px-4 py-3 text-center">
                                 {module.actions.includes('create') ? <input type="checkbox" checked={roleForm.permissions[module.id]?.create || false} onChange={() => handleCheckboxChange(module.id, 'create')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
                               </td>
-                              
-                              {/* KOLOM UBAH & SETUJUI (EDIT/APPROVE) */}
                               <td className="px-4 py-3 text-center">
                                 {module.actions.includes('edit') ? (
                                   <input type="checkbox" checked={roleForm.permissions[module.id]?.edit || false} onChange={() => handleCheckboxChange(module.id, 'edit')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/>
@@ -5149,13 +5464,9 @@ export default function ClientAdmin() {
                                   <input type="checkbox" checked={roleForm.permissions[module.id]?.approve || false} onChange={() => handleCheckboxChange(module.id, 'approve')} className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/>
                                 ) : <span className="text-slate-300">-</span>}
                               </td>
-                              
-                              {/* KOLOM HAPUS (DELETE) */}
                               <td className="px-4 py-3 text-center">
                                 {module.actions.includes('delete') ? <input type="checkbox" checked={roleForm.permissions[module.id]?.delete || false} onChange={() => handleCheckboxChange(module.id, 'delete')} className="w-4 h-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
                               </td>
-
-                              {/* KOLOM EXPORT */}
                               <td className="px-4 py-3 text-center">
                                 {module.actions.includes('export') ? <input type="checkbox" checked={roleForm.permissions[module.id]?.export || false} onChange={() => handleCheckboxChange(module.id, 'export')} className="w-4 h-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer"/> : <span className="text-slate-300">-</span>}
                               </td>
@@ -5165,23 +5476,18 @@ export default function ClientAdmin() {
                       </table>
                     </div>
 
-                    {/* AKSES MENU APLIKASI MOBILE (BAWAAN ROLE) */}
                       <div className="mt-6">
                         <h4 className="text-xs font-black text-slate-800 uppercase mb-3">Akses Menu Aplikasi Mobile (Bawaan Role)</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                          {/* GABUNGKAN ARRAY MENU BAWAAN DAN MENU CUSTOM */}
                           {['absen', 'laporan', 'pengajuan', 'task', 'slip', ...customMenus.map(m => `custom_${m.id}`)]
                           .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) 
                           .map(menu => {
                             const isChecked = roleForm?.permissions?.mobile?.[menu] === true;
-                            
-                            // Penamaan Label Dinamis
                             let labelText = `Menu ${menu}`;
                             if (menu.startsWith('custom_')) {
                               const mObj = customMenus.find(m => `custom_${m.id}` === menu);
                               labelText = mObj ? mObj.menu_name : 'Custom Menu';
                             }
-                            
                             return (
                             <label key={menu} className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2.5 rounded-lg cursor-pointer hover:bg-slate-100 transition-colors">
                               <input 
@@ -5229,15 +5535,11 @@ export default function ClientAdmin() {
                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Pilih Karyawan</label>
                     <select required disabled={!!shiftForm.id} value={shiftForm.employee_id} onChange={e => setShiftForm({...shiftForm, employee_id: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50">
                        <option value="">-- Pilih Pegawai --</option>
-                       {/* FILTER PINTAR: Sembunyikan Developer, Super Admin, dan Pegawai Nonaktif */}
-                       {employees
-                        .filter(emp => emp.role !== 'Developer' && emp.role !== 'Super Admin' && emp.status_pegawai !== 'NONAKTIF')
-                        .map(emp => (
+                       {employees.filter(emp => emp.role !== 'Developer' && emp.role !== 'Super Admin' && emp.status_pegawai !== 'NONAKTIF').map(emp => (
                           <option key={emp.id} value={emp.id}>{emp.nama_lengkap} ({emp.nik_karyawan})</option>
                         ))}
                     </select>
                   </div>
-
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Mulai Tgl</label>
@@ -5248,7 +5550,6 @@ export default function ClientAdmin() {
                       <input disabled={!!shiftForm.id} type="date" value={shiftForm.end_date} onChange={e => setShiftForm({...shiftForm, end_date: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 placeholder-slate-400" title="Kosongkan jika hanya untuk 1 hari" />
                     </div>
                   </div>
-
                   <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-4">
                     <div>
                       <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Tipe Shift</label>
@@ -5265,7 +5566,6 @@ export default function ClientAdmin() {
                       </div>
                     </div>
                   </div>
-
                   <label className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl cursor-pointer hover:bg-amber-100 transition-colors">
                     <input type="checkbox" checked={shiftForm.is_bko} onChange={e => setShiftForm({...shiftForm, is_bko: e.target.checked})} className="w-5 h-5 text-amber-600 rounded border-amber-300 focus:ring-amber-500"/>
                     <div className="flex-1">
@@ -5273,7 +5573,6 @@ export default function ClientAdmin() {
                        <span className="text-[10px] font-medium text-amber-700">Tandai shift ini sebagai bantuan personil (BKO).</span>
                     </div>
                   </label>
-
                   <p className="text-[10px] text-slate-400 italic mt-1">*Kosongkan jam masuk/keluar jika Tipe Shift adalah Libur/Off.</p>
                 </div>
                 <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
@@ -5289,20 +5588,11 @@ export default function ClientAdmin() {
         {isProfileModalOpen && (
           <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-[100] flex justify-center items-center p-4">
             <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 border border-white/20">
-              
-              {/* Header Banner - Modern Gradient */}
               <div className="relative h-32 bg-gradient-to-r from-blue-600 to-indigo-700 flex justify-between items-start px-6 py-5 shrink-0">
-                <h3 className="font-black text-lg text-white flex items-center gap-2 drop-shadow-md">
-                  <UserCircle size={20} className="text-blue-200"/> Pengaturan Akun
-                </h3>
-                <button type="button" onClick={() => { stopCamera(); setIsProfileModalOpen(false); }} className="p-2 bg-black/20 text-white rounded-full hover:bg-black/40 backdrop-blur-sm transition-all shadow-sm">
-                  <X size={16}/>
-                </button>
+                <h3 className="font-black text-lg text-white flex items-center gap-2 drop-shadow-md"><UserCircle size={20} className="text-blue-200"/> Pengaturan Akun</h3>
+                <button type="button" onClick={() => { stopCamera(); setIsProfileModalOpen(false); }} className="p-2 bg-black/20 text-white rounded-full hover:bg-black/40 backdrop-blur-sm transition-all shadow-sm"><X size={16}/></button>
               </div>
-
               <form onSubmit={handleSaveProfile} className="flex flex-col relative px-6 pb-6 pt-0">
-                
-                {/* Avatar Section - Menimpa Header (Overlapping Style) */}
                 <div className="flex flex-col items-center -mt-16 mb-6 relative z-10">
                   <div className="w-32 h-32 rounded-full bg-white border-4 border-white shadow-xl flex items-center justify-center overflow-hidden">
                     {isCameraActive ? (
@@ -5315,24 +5605,16 @@ export default function ClientAdmin() {
                       <UserCircle size={60} className="text-slate-300" />
                     )}
                   </div>
-
-                  {/* Tombol Kontrol Kamera & Galeri Modern (Pill Style) */}
                   <div className="mt-5 w-full">
                     {isCameraActive ? (
                       <div className="flex gap-3 justify-center animate-in slide-in-from-bottom-2 fade-in">
-                        <button type="button" onClick={capturePhoto} className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-full text-sm font-bold shadow-lg shadow-emerald-500/30 transition-all flex items-center gap-2">
-                          <Camera size={16}/> Jepret Foto
-                        </button>
-                        <button type="button" onClick={stopCamera} className="px-6 py-2.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-full text-sm font-bold transition-all">
-                          Batal
-                        </button>
+                        <button type="button" onClick={capturePhoto} className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-full text-sm font-bold shadow-lg shadow-emerald-500/30 transition-all flex items-center gap-2"><Camera size={16}/> Jepret Foto</button>
+                        <button type="button" onClick={stopCamera} className="px-6 py-2.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-full text-sm font-bold transition-all">Batal</button>
                       </div>
                     ) : (
                       <div className="flex justify-center">
                         <div className="inline-flex bg-slate-50 p-1.5 rounded-full border border-slate-100 shadow-sm">
-                          <button type="button" onClick={startCamera} className="px-5 py-2 hover:bg-white text-slate-600 hover:text-blue-600 hover:shadow-sm rounded-full text-xs font-bold transition-all flex items-center gap-2">
-                            <Camera size={14}/> Live Kamera
-                          </button>
+                          <button type="button" onClick={startCamera} className="px-5 py-2 hover:bg-white text-slate-600 hover:text-blue-600 hover:shadow-sm rounded-full text-xs font-bold transition-all flex items-center gap-2"><Camera size={14}/> Live Kamera</button>
                           <label className="px-5 py-2 hover:bg-white text-slate-600 hover:text-blue-600 hover:shadow-sm rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-2">
                             <Upload size={14}/> Pilih Galeri
                             <input type="file" accept="image/*" onChange={e => { stopCamera(); setProfileForm({...profileForm, file: e.target.files[0]}); }} className="hidden" />
@@ -5342,23 +5624,13 @@ export default function ClientAdmin() {
                     )}
                   </div>
                 </div>
-
-                {/* Password Section - Soft Card Design */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2 mb-8 shadow-inner">
-                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                    <Key size={12} className="text-slate-400"/> Keamanan Akun
-                  </label>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2"><Key size={12} className="text-slate-400"/> Keamanan Akun</label>
                   <input type="password" placeholder="Ketik password baru jika ingin diubah..." value={profileForm.password} onChange={e => setProfileForm({...profileForm, password: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 text-sm outline-none font-bold text-slate-700 transition-all placeholder:font-medium placeholder:text-slate-400"/>
-                  <p className="text-[10px] text-slate-400 font-medium leading-relaxed pt-1">
-                    Biarkan kolom di atas kosong jika Anda tidak berencana mengganti kata sandi.
-                  </p>
+                  <p className="text-[10px] text-slate-400 font-medium leading-relaxed pt-1">Biarkan kolom di atas kosong jika Anda tidak berencana mengganti kata sandi.</p>
                 </div>
-
-                {/* Footer Buttons */}
                 <div className="flex gap-3">
-                  <button type="button" onClick={() => { stopCamera(); setIsProfileModalOpen(false); }} className="flex-1 py-3.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">
-                    Kembali
-                  </button>
+                  <button type="button" onClick={() => { stopCamera(); setIsProfileModalOpen(false); }} className="flex-1 py-3.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Kembali</button>
                   <button type="submit" disabled={isUpdatingProfile} className="flex-[2] py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/30 disabled:opacity-50 transition-all flex items-center justify-center gap-2">
                     {isUpdatingProfile ? <RefreshCw size={18} className="animate-spin"/> : <Check size={18}/>} 
                     {isUpdatingProfile ? 'Memproses...' : 'Simpan Perubahan'}
@@ -5373,7 +5645,6 @@ export default function ClientAdmin() {
         {isPayrollModalOpen && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-center items-center p-4">
             <div className="bg-slate-50 w-full max-w-3xl max-h-[90vh] rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300 border border-slate-200">
-              
               <div className="px-6 py-5 border-b border-slate-200 flex justify-between items-center bg-white shrink-0">
                 <div>
                   <h3 className="font-black text-lg text-slate-800 flex items-center gap-2"><Wallet size={20} className="text-blue-600"/> Input Payroll Manual</h3>
@@ -5381,11 +5652,8 @@ export default function ClientAdmin() {
                 </div>
                 <button type="button" onClick={() => setIsPayrollModalOpen(false)} className="p-2 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200"><X size={16}/></button>
               </div>
-
               <form onSubmit={handleSaveManualPayroll} className="flex flex-col flex-1 overflow-hidden">
                 <div className="p-6 md:p-8 overflow-y-auto bg-white flex-1 custom-scrollbar space-y-6">
-                  
-                  {/* Pilihan Pegawai & Gaji Pokok */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Pilih Karyawan</label>
@@ -5398,19 +5666,15 @@ export default function ClientAdmin() {
                     </div>
                     <div>
                       <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">Gaji Pokok (Basic Salary)</label>
-                      <input required type="number" placeholder="Cth: 5000000" value={payrollForm.basic_salary} onChange={e => setPayrollForm({...payrollForm, basic_salary: e.target.value})} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
+                      <input required type="number" placeholder="Cth: 5000000" value={payrollForm.basic_salary} onChange={e => handleBasicSalaryChange(e.target.value)} className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 text-sm outline-none font-bold bg-slate-50 focus:bg-white transition-all"/>
                     </div>
                   </div>
-
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-100">
-                    
-                    {/* BAGIAN PENAMBAHAN (TUNJANGAN) */}
                     <div className="space-y-3">
                       <div className="flex justify-between items-center bg-emerald-50 p-3 rounded-xl border border-emerald-100">
                         <h4 className="text-xs font-black text-emerald-800 uppercase tracking-widest">Penambahan [+]</h4>
                         <button type="button" onClick={() => handleAddPayrollComponent('additions')} className="text-[10px] bg-emerald-600 text-white px-2 py-1 rounded font-bold hover:bg-emerald-700 flex items-center gap-1"><Plus size={12}/> Tambah</button>
                       </div>
-                      
                       {payrollForm.additions.map((item, index) => (
                         <div key={index} className="flex gap-2 items-center animate-in fade-in">
                           <input type="text" placeholder="Nama Komponen" value={item.name} onChange={e => handleUpdatePayrollComponent('additions', index, 'name', e.target.value)} className="w-1/2 px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-emerald-500"/>
@@ -5420,14 +5684,11 @@ export default function ClientAdmin() {
                       ))}
                       {payrollForm.additions.length === 0 && <p className="text-[10px] text-slate-400 italic text-center">Tidak ada komponen penambahan.</p>}
                     </div>
-
-                    {/* BAGIAN PENGURANGAN (POTONGAN) */}
                     <div className="space-y-3">
                       <div className="flex justify-between items-center bg-rose-50 p-3 rounded-xl border border-rose-100">
                         <h4 className="text-xs font-black text-rose-800 uppercase tracking-widest">Potongan [-]</h4>
                         <button type="button" onClick={() => handleAddPayrollComponent('deductions')} className="text-[10px] bg-rose-600 text-white px-2 py-1 rounded font-bold hover:bg-rose-700 flex items-center gap-1"><Plus size={12}/> Tambah</button>
                       </div>
-                      
                       {payrollForm.deductions.map((item, index) => (
                         <div key={index} className="flex gap-2 items-center animate-in fade-in">
                           <input type="text" placeholder="Nama Komponen" value={item.name} onChange={e => handleUpdatePayrollComponent('deductions', index, 'name', e.target.value)} className="w-1/2 px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-rose-500"/>
@@ -5438,20 +5699,13 @@ export default function ClientAdmin() {
                       {payrollForm.deductions.length === 0 && <p className="text-[10px] text-slate-400 italic text-center">Tidak ada komponen potongan.</p>}
                     </div>
                   </div>
-
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mt-6">
-                    <p className="text-[10px] font-bold text-amber-800 italic">
-                      *Catatan: Sistem akan secara otomatis menghitung Pajak PPh 21, Total Kehadiran, dan Jam Kerja aktual dari HRIS saat tombol "Proses & Simpan" ditekan.
-                    </p>
+                    <p className="text-[10px] font-bold text-amber-800 italic">*Catatan: Sistem akan secara otomatis menghitung Pajak PPh 21, Total Kehadiran, dan Jam Kerja aktual dari HRIS saat tombol "Proses & Simpan" ditekan.</p>
                   </div>
                 </div>
-
-                {/* Footer Buttons */}
                 <div className="p-5 border-t border-slate-200 bg-slate-50 flex justify-end gap-3 shrink-0">
                   <button type="button" onClick={() => setIsPayrollModalOpen(false)} className="px-5 py-3 text-slate-600 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors">Batal</button>
-                  <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 flex items-center gap-2">
-                    <Check size={16}/> Proses & Simpan Gaji
-                  </button>
+                  <button type="submit" className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 flex items-center gap-2"><Check size={16}/> Proses & Simpan Gaji</button>
                 </div>
               </form>
             </div>
@@ -5507,8 +5761,6 @@ export default function ClientAdmin() {
               </div>
               <form onSubmit={handleSaveInvoice} className="flex flex-col flex-1 overflow-hidden">
                 <div className="p-6 md:p-8 overflow-y-auto space-y-6 flex-1 custom-scrollbar">
-                  
-                  {/* Data Klien & Tanggal */}
                   <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="md:col-span-3">
                       <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Tujuan / Nama Klien</label>
@@ -5527,8 +5779,6 @@ export default function ClientAdmin() {
                       <input required type="date" value={invoiceForm.due_date} onChange={e => setInvoiceForm({...invoiceForm, due_date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg text-sm font-bold bg-slate-50 outline-none focus:border-blue-500"/>
                     </div>
                   </div>
-
-                  {/* Rincian Item Tagihan */}
                   <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
                     <div className="flex justify-between items-center border-b border-slate-100 pb-2">
                       <h4 className="text-xs font-black text-slate-700 uppercase">Rincian Item Jasa/Produk</h4>
@@ -5543,8 +5793,6 @@ export default function ClientAdmin() {
                       </div>
                     ))}
                   </div>
-
-                  {/* Pajak, Diskon & Catatan Tambahan */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div><textarea placeholder="Syarat & Ketentuan / Catatan Bank..." value={invoiceForm.notes} onChange={e => setInvoiceForm({...invoiceForm, notes: e.target.value})} className="w-full h-full min-h-[100px] p-4 bg-white border border-slate-200 rounded-2xl text-xs font-medium outline-none focus:border-blue-500 resize-none"></textarea></div>
                     <div className="bg-slate-100 p-5 rounded-2xl border border-slate-200 space-y-3">
@@ -5558,7 +5806,6 @@ export default function ClientAdmin() {
                       </div>
                     </div>
                   </div>
-
                 </div>
                 <div className="p-5 border-t border-slate-200 bg-white flex justify-end gap-3 shrink-0">
                   <button type="button" onClick={() => setIsInvoiceModalOpen(false)} className="px-5 py-3 text-slate-600 hover:bg-slate-100 rounded-xl font-bold text-sm transition-colors">Batal</button>
@@ -5569,44 +5816,26 @@ export default function ClientAdmin() {
           </div>
         )}
 
-        {/* ========================================== */}
         {/* MODAL SLIP GAJI (POP-UP) */}
-        {/* ========================================== */}
         {selectedPayslip && (
           <div className="fixed inset-0 z-[99] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-300">
             <div className="bg-[#f8fafc] w-full max-w-2xl rounded-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
-              
-              {/* HEADER MODAL & TOMBOL CLOSE */}
               <div className="flex justify-between items-center p-5 border-b border-slate-200 bg-white">
-                <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                  <Receipt size={20} className="text-blue-600"/> Rincian Slip Gaji
-                </h3>
-                <button onClick={() => setSelectedPayslip(null)} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors">
-                  <X size={20}/>
-                </button>
+                <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2"><Receipt size={20} className="text-blue-600"/> Rincian Slip Gaji</h3>
+                <button onClick={() => setSelectedPayslip(null)} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors"><X size={20}/></button>
               </div>
-
-              {/* KONTEN KERTAS PAYSLIP (BISA DI-SCROLL) */}
               <div className="flex-1 overflow-y-auto p-8 bg-slate-100 custom-scrollbar">
                 <div className="max-w-xl mx-auto shadow-[0_10px_40px_rgba(0,0,0,0.1)]">
-                  
-                  {/* --- AREA YANG AKAN DI-PRINT PDF (HEX COLOR FIX) --- */}
                   <div id={`payslip-${selectedPayslip.id}`} className="border border-[#cbd5e1] p-8 rounded-xl bg-[#ffffff] text-[#0f172a] relative">
-                     
-                     {/* HEADER SURAT */}
                      <div className="flex justify-between items-start border-b-2 border-[#1e293b] pb-4 mb-5">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-[#1e293b] text-[#ffffff] rounded-lg flex items-center justify-center font-black text-sm">
-                            {appConfig.short}
-                          </div>
+                          <div className="w-10 h-10 bg-[#1e293b] text-[#ffffff] rounded-lg flex items-center justify-center font-black text-sm">{appConfig.short}</div>
                           <div>
                             <h2 className="text-base font-black text-[#0f172a] uppercase tracking-widest leading-tight">{appConfig.name}</h2>
                             <p className="text-[10px] text-[#475569] font-medium mt-0.5">Slip Gaji Karyawan</p>
                           </div>
                         </div>
                      </div>
-
-                     {/* INFO KARYAWAN */}
                      <table className="w-full text-xs mb-6 border-collapse border border-[#1e293b]">
                         <tbody>
                            <tr>
@@ -5627,8 +5856,6 @@ export default function ClientAdmin() {
                            </tr>
                         </tbody>
                      </table>
-
-                     {/* PENGHASILAN (EARNINGS) */}
                      <table className="w-full text-xs mb-5 border-collapse border border-[#1e293b]">
                         <thead className="bg-[#1e293b] text-[#ffffff]">
                            <tr>
@@ -5648,204 +5875,53 @@ export default function ClientAdmin() {
                            </tr>
                            ))}
                            <tr className="bg-[#f1f5f9]">
-                              <td className="p-2.5 border border-[#1e293b] text-right font-black">Total Kotor</td>
-                              <td className="p-2.5 border border-[#1e293b] text-right font-black">{formatRupiah(selectedPayslip.gross_salary)}</td>
+                              <td className="p-2.5 border border-[#1e293b] font-black">TOTAL PENGHASILAN KOTOR</td>
+                              <td className="p-2.5 border border-[#1e293b] text-right font-black text-[#166534]">{formatRupiah(selectedPayslip.gross_salary)}</td>
                            </tr>
                         </tbody>
                      </table>
-
-                     {/* POTONGAN (DEDUCTIONS) */}
                      <table className="w-full text-xs mb-6 border-collapse border border-[#1e293b]">
                         <thead className="bg-[#1e293b] text-[#ffffff]">
                            <tr>
-                              <th className="p-2.5 text-left border-r border-[#334155]">POTONGAN</th>
+                              <th className="p-2.5 text-left border-r border-[#334155]">POTONGAN & PAJAK</th>
                               <th className="p-2.5 text-right">NOMINAL</th>
                            </tr>
                         </thead>
                         <tbody>
                            <tr>
-                              <td className="p-2.5 border border-[#1e293b] font-semibold">PPh 21</td>
-                              <td className="p-2.5 border border-[#1e293b] text-right">{formatRupiah(selectedPayslip.tax_pph21)}</td>
+                              <td className="p-2.5 border border-[#1e293b] font-semibold">Pajak Penghasilan (PPh 21)</td>
+                              <td className="p-2.5 border border-[#1e293b] text-right text-[#991b1b]">{formatRupiah(selectedPayslip.tax_pph21)}</td>
                            </tr>
                            {(selectedPayslip.deductions || []).map((ded, i) => (
                            <tr key={i}>
                               <td className="p-2.5 border border-[#1e293b] font-semibold">{ded.name}</td>
-                              <td className="p-2.5 border border-[#1e293b] text-right">{formatRupiah(ded.amount)}</td>
+                              <td className="p-2.5 border border-[#1e293b] text-right text-[#991b1b]">{formatRupiah(ded.amount)}</td>
                            </tr>
                            ))}
                         </tbody>
                      </table>
-
-                     {/* TAKE HOME PAY */}
-                     <table className="w-full border-collapse border border-[#0f172a] mb-6">
-                        <tbody>
-                           <tr className="bg-[#0f172a] text-[#ffffff] font-black">
-                              <td className="p-4 text-left text-sm">TAKE HOME PAY</td>
-                              <td className="p-4 text-right text-lg">{formatRupiah(selectedPayslip.net_salary)}</td>
-                           </tr>
-                        </tbody>
-                     </table>
-                     
-                     <p className="text-[9px] text-[#64748b] italic text-center">
-                        Dokumen ini sah dan diterbitkan otomatis oleh sistem pada {new Date().toLocaleDateString('id-ID')}.
-                     </p>
+                     <div className="bg-[#1e293b] text-[#ffffff] p-4 rounded-lg flex justify-between items-center mt-6">
+                        <span className="font-bold uppercase tracking-wider text-xs">Penerimaan Bersih (Take Home Pay)</span>
+                        <span className="font-black text-xl">{formatRupiah(selectedPayslip.net_salary)}</span>
+                     </div>
+                     <div className="mt-12 flex justify-between items-end">
+                        <div className="text-[9px] text-[#475569] italic max-w-[200px]">Dokumen ini dicetak otomatis oleh sistem dan sah tanpa tanda tangan basah.</div>
+                        <div className="text-center">
+                           <p className="text-xs text-[#0f172a] font-bold mb-10">Finance / HRD</p>
+                           <p className="text-[10px] text-[#475569] border-t border-[#cbd5e1] pt-1 uppercase tracking-widest">{appConfig.name}</p>
+                        </div>
+                     </div>
                   </div>
-                  {/* --- AKHIR AREA PRINT PDF --- */}
-                  
                 </div>
               </div>
-
-              {/* FOOTER MODAL & TOMBOL DOWNLOAD */}
-              <div className="p-5 border-t border-slate-200 bg-white flex justify-end gap-4">
-                 <button onClick={() => setSelectedPayslip(null)} className="px-6 py-3 text-slate-500 hover:bg-slate-100 rounded-xl font-bold text-sm transition-colors">
-                   Tutup
-                 </button>
-                 <button 
-                   onClick={() => handleDownloadPDF(`payslip-${selectedPayslip.id}`, `Payslip_${selectedPayslip.employee?.nama_lengkap}_${selectedPayslip.period}.pdf`)} 
-                   className="px-6 py-3 bg-[#0a195c] hover:bg-blue-900 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-900/30 flex items-center gap-2 transition-all active:scale-95"
-                 >
-                   <Download size={18}/> Download PDF
-                 </button>
+              <div className="p-4 bg-white border-t border-slate-200 flex justify-end gap-3 shrink-0">
+                 <button onClick={() => handleDownloadPDF(`payslip-${selectedPayslip.id}`, `Payslip_${selectedPayslip.employee?.nama_lengkap.replace(/\s+/g, '_')}_${selectedPayslip.period}.pdf`)} className="bg-slate-800 hover:bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition-all shadow-md flex items-center gap-2"><Download size={16}/> Unduh PDF Payslip</button>
               </div>
-
             </div>
           </div>
         )}
 
-        {/* ========================================== */}
-        {/* TEMPLATE PDF ARUS KAS (DISEMBUNYIKAN TAPI TETAP DI-RENDER) */}
-        {/* ========================================== */}
-        {/* Perbaikan: Tetap di pojok kiri atas agar tidak error, tapi dibuat transparan & tidak bisa diklik */}
-        <div className="fixed top-0 left-0 -z-50 opacity-0 pointer-events-none">
-           
-           {/* Perbaikan: Menggunakan w-[190mm] agar pas persis dengan kertas A4 (210mm) dikurangi margin kiri-kanan 10mm */}
-           <div id="cashflow-pdf-report" className="bg-[#ffffff] text-[#1e293b] font-sans w-[190mm] p-8 box-border relative">
-              
-              {/* WATERMARK PERUSAHAAN */}
-              <div className="absolute inset-0 flex items-center justify-center opacity-[0.04] pointer-events-none overflow-hidden">
-                {appConfig.logo_url ? (
-                    <img src={appConfig.logo_url} crossOrigin="anonymous" className="w-[120mm] object-contain grayscale" alt="watermark" />
-                ) : (
-                    <span className="text-[150px] font-black">{appConfig.short}</span>
-                )}
-              </div>
-
-              {/* HEADER SURAT */}
-              <div className="flex justify-between items-start border-b-4 border-[#0f172a] pb-6 mb-6 relative z-10 w-full">
-                 <div className="flex items-center gap-4 max-w-[70%]">
-                    {/* LOGO DARI DATABASE */}
-                    <div className="w-16 h-16 bg-[#ffffff] text-[#0f172a] rounded-xl flex items-center justify-center font-black text-3xl shrink-0 overflow-hidden border border-[#e2e8f0] shadow-sm">
-                      {appConfig.logo_url ? (
-                        <img src={appConfig.logo_url} crossOrigin="anonymous" alt="Logo" className="w-full h-full object-contain p-1" />
-                      ) : (
-                        appConfig.short
-                      )}
-                    </div>
-                    <div className="flex flex-col justify-center">
-                       <h1 className="text-xl font-black uppercase tracking-widest text-[#0f172a] leading-tight mb-1 truncate">{appConfig.name}</h1>
-                       <p className="text-xs font-semibold text-[#64748b] m-0">Laporan Konsolidasi Arus Kas Perusahaan</p>
-                    </div>
-                 </div>
-                 <div className="text-right shrink-0 max-w-[30%]">
-                    <p className="text-[9px] font-black text-[#94a3b8] uppercase tracking-widest mb-1">Periode Laporan</p>
-                    <p className="text-lg font-black text-[#2563eb] border-2 border-[#2563eb] px-3 py-1 rounded-lg inline-block bg-[#eff6ff]">{cashflowPeriod}</p>
-                 </div>
-              </div>
-
-              {/* KOTAK RINGKASAN */}
-              <div className="flex gap-4 mb-6 relative z-10 w-full box-border">
-                 <div className="flex-1 border border-[#e2e8f0] p-4 rounded-xl bg-[#f8fafc] w-[33%] overflow-hidden">
-                    <p className="text-[9px] font-black text-[#64748b] uppercase tracking-wider mb-2">Total Pemasukan</p>
-                    <p className="text-lg font-black text-[#059669] truncate">{formatRupiah(monthIncome)}</p>
-                 </div>
-                 <div className="flex-1 border border-[#e2e8f0] p-4 rounded-xl bg-[#f8fafc] w-[33%] overflow-hidden">
-                    <p className="text-[9px] font-black text-[#64748b] uppercase tracking-wider mb-2">Total Pengeluaran</p>
-                    <p className="text-lg font-black text-[#e11d48] truncate">{formatRupiah(monthExpense)}</p>
-                 </div>
-                 <div className="flex-1 border border-[#0f172a] p-4 rounded-xl bg-[#0f172a] text-white shadow-lg w-[33%] overflow-hidden">
-                    <p className="text-[9px] font-black text-[#94a3b8] uppercase tracking-wider mb-2">Saldo Berjalan</p>
-                    <p className="text-lg font-black text-[#ffffff] truncate">{formatRupiah(monthIncome - monthExpense)}</p>
-                 </div>
-              </div>
-
-              {/* TABEL DATA ARUS KAS */}
-              <div className="relative z-10 w-full box-border">
-                 <table className="w-full text-left border-collapse border border-[#cbd5e1] mb-6 table-fixed">
-                    <thead className="bg-[#f1f5f9] text-[9px] font-black text-[#334155] uppercase tracking-wider">
-                       <tr>
-                          <th className="p-2 border border-[#cbd5e1] w-[18%]">Tanggal</th>
-                          <th className="p-2 border border-[#cbd5e1] w-[42%]">Kategori & Keterangan</th>
-                          <th className="p-2 border border-[#cbd5e1] w-[15%] text-center">Jenis</th>
-                          <th className="p-2 border border-[#cbd5e1] w-[25%] text-right">Nominal</th>
-                       </tr>
-                    </thead>
-                    <tbody className="text-[11px] font-medium text-[#1e293b]">
-                       {currentMonthCashflows.map(cf => (
-                          <tr key={cf.id} className="even:bg-[#f8fafc]">
-                             <td className="p-2 border border-[#cbd5e1] whitespace-nowrap">{cf.date}</td>
-                             <td className="p-2 border border-[#cbd5e1] break-words">
-                                <span className="font-bold block text-[#0f172a] mb-0.5">{cf.category}</span>
-                                <span className="text-[9px] text-[#64748b] leading-tight block">{cf.description}</span>
-                             </td>
-                             <td className="p-2 border border-[#cbd5e1] text-center">
-                                <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase inline-block ${cf.type === 'INCOME' ? 'bg-[#d1fae5] text-[#059669]' : 'bg-[#ffe4e6] text-[#e11d48]'}`}>
-                                   {cf.type === 'INCOME' ? 'Masuk' : 'Keluar'}
-                                </span>
-                             </td>
-                             <td className="p-2 border border-[#cbd5e1] text-right font-black whitespace-nowrap">
-                                {formatRupiah(cf.amount)}
-                             </td>
-                          </tr>
-                       ))}
-                       {currentMonthCashflows.length === 0 && (
-                          <tr><td colSpan="4" className="text-center py-6 text-[#94a3b8] font-semibold">Tidak ada transaksi tercatat pada periode ini.</td></tr>
-                       )}
-                    </tbody>
-                 </table>
-              </div>
-
-              {/* KOLOM TANDA TANGAN */}
-              <div className="mt-8 flex justify-end relative z-10 w-full">
-                 <div className="text-center w-[45mm]">
-                    <p className="text-[10px] text-[#64748b] mb-12">Dibuat & Disetujui Oleh,</p>
-                    <div className="border-b border-[#cbd5e1] mb-1 pb-1">
-                       <p className="text-xs font-bold text-[#0f172a] truncate">{currentUser.name}</p>
-                    </div>
-                    <p className="text-[8px] text-[#94a3b8] uppercase tracking-widest truncate">{currentUser.role || 'Admin Perusahaan'}</p>
-                 </div>
-              </div>
-
-           </div>
-        </div>
       </main>
-
-      {/* MOBILE BOTTOM NAVIGATION (PROTECTED) */}
-      <nav className="md:hidden fixed bottom-0 w-full bg-white border-t border-slate-200 flex justify-around items-center px-2 py-3 pb-6 z-40 shadow-[0_-4px_20px_-10px_rgba(0,0,0,0.1)]">
-        {hasPermission('hris', 'view') && (
-          <button onClick={() => setActiveMenu('hris')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'hris' ? appConfig.text : 'text-slate-400'}`}>
-            <div className={`p-1.5 rounded-xl ${activeMenu === 'hris' ? appConfig.light : 'bg-transparent'}`}><Users size={22} className={activeMenu === 'hris' ? `fill-blue-100 ${appConfig.text}` : ''} /></div>
-            <span className={`text-[10px] font-bold ${activeMenu === 'hris' ? appConfig.text : 'font-medium'}`}>HRIS</span>
-          </button>
-        )}
-        {hasPermission('task', 'view') && (
-          <button onClick={() => setActiveMenu('task')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'task' ? appConfig.text : 'text-slate-400'}`}>
-            <div className={`p-1.5 rounded-xl ${activeMenu === 'task' ? appConfig.light : 'bg-transparent'}`}><CheckSquare size={22} className={activeMenu === 'task' ? `fill-blue-100 ${appConfig.text}` : ''} /></div>
-            <span className={`text-[10px] font-bold ${activeMenu === 'task' ? appConfig.text : 'font-medium'}`}>Task</span>
-          </button>
-        )}
-        {hasPermission('finance', 'view') && (
-          <button onClick={() => setActiveMenu('finance')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'finance' ? appConfig.text : 'text-slate-400'}`}>
-            <div className={`p-1.5 rounded-xl ${activeMenu === 'finance' ? appConfig.light : 'bg-transparent'}`}><Wallet size={22} className={activeMenu === 'finance' ? `fill-blue-100 ${appConfig.text}` : ''} /></div>
-            <span className={`text-[10px] font-bold ${activeMenu === 'finance' ? appConfig.text : 'font-medium'}`}>Finance</span>
-          </button>
-        )}
-        {hasPermission('settings', 'view') && (
-          <button onClick={() => setActiveMenu('settings')} className={`flex flex-col items-center gap-1.5 w-16 transition-colors ${activeMenu === 'settings' ? appConfig.text : 'text-slate-400'}`}>
-            <div className={`p-1.5 rounded-xl ${activeMenu === 'settings' ? appConfig.light : 'bg-transparent'}`}><Settings size={22} className={activeMenu === 'settings' ? `fill-blue-100 ${appConfig.text}` : ''} /></div>
-            <span className={`text-[10px] font-bold ${activeMenu === 'settings' ? appConfig.text : 'font-medium'}`}>Sistem</span>
-          </button>
-        )}
-      </nav>
     </div>
   );
 }
