@@ -621,29 +621,33 @@ export default function MobileApp() {
     } else { setPatrolLocStatus('invalid'); }
   };
 
+  // --- SOLUSI LAYAR HITAM KAMERA ---
+  // Gunakan useEffect agar video stream menempel SETELAH pop-up terbuka
+  useEffect(() => {
+    if (isPatrolCameraOpen && patrolVideoRef.current && patrolCameraStream) {
+      patrolVideoRef.current.srcObject = patrolCameraStream;
+    }
+  }, [isPatrolCameraOpen, patrolCameraStream]);
+
   const startPatrolCamera = async (mode = 'environment') => {
+    setIsPatrolCameraOpen(true); // Buka layar Pop-Up dulu
+    setPatrolFacingMode(mode);
     try {
       if (patrolCameraStream) patrolCameraStream.getTracks().forEach(t => t.stop());
       
-      // Paksa browser mencari kamera yang sesuai
       const constraints = { video: { facingMode: mode } };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      setPatrolCameraStream(stream);
-      if (patrolVideoRef.current) patrolVideoRef.current.srcObject = stream;
-      setPatrolFacingMode(mode);
-      setIsPatrolCameraOpen(true);
+      setPatrolCameraStream(stream); // Video akan otomatis muncul lewat useEffect di atas
     } catch (err) {
       console.error(err);
-      // Fallback: Jika kamera belakang gagal/tidak ditemukan, paksa buka kamera apa saja
+      // Fallback jika kamera belakang gagal
       try {
          const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true });
          setPatrolCameraStream(fallbackStream);
-         if (patrolVideoRef.current) patrolVideoRef.current.srcObject = fallbackStream;
          setPatrolFacingMode('user');
-         setIsPatrolCameraOpen(true);
       } catch (fallbackErr) {
          alert("Gagal mengakses modul kamera HP Anda.");
+         setIsPatrolCameraOpen(false);
       }
     }
   };
@@ -687,7 +691,7 @@ export default function MobileApp() {
     setIsSubmittingReport(true);
     
     try {
-      if (!navigator.onLine) throw new Error("Failed to fetch"); // Paksa error jika HP jelas-jelas mati data
+      if (!navigator.onLine) throw new Error("Failed to fetch");
 
       let uploadedData = [];
       for (let i = 0; i < patrolPhotos.length; i++) {
@@ -711,8 +715,9 @@ export default function MobileApp() {
       setPatrolPhotos([]); setPatrolDesc(''); setPatrolLocStatus(null); fetchHistories(currentUser.id);
       setIsSubmittingReport(false);
     } catch (error) {
-      // JARING PENGAMAN OFFLINE ULTIMATE
-      if (error.message.includes('Failed to fetch') || error.message.includes('Network') || !navigator.onLine) {
+      // PENANGKAP ERROR ANTI-BOCOR
+      const errMsg = (error?.message || String(error)).toLowerCase();
+      if (errMsg.includes('failed to fetch') || errMsg.includes('network') || !navigator.onLine) {
         await saveOfflineData('LAPORAN', {
           photos: patrolPhotos, desc: patrolDesc, locName: patrolLocName, reportType: 'patroli', 
           clientId: currentUser.client_id, employeeId: currentUser.id
@@ -721,7 +726,7 @@ export default function MobileApp() {
         alert("📡 Sinyal Lemah/Terputus! Laporan Patroli otomatis disimpan di HP dan akan dikirim saat sinyal stabil.");
         setPatrolPhotos([]); setPatrolDesc(''); setPatrolLocStatus(null); setActiveMenu('home');
       } else {
-        alert("Gagal kirim laporan: " + error.message);
+        alert("Gagal kirim laporan: " + (error?.message || 'Error tidak diketahui'));
       }
       setIsSubmittingReport(false);
     }
@@ -732,7 +737,7 @@ export default function MobileApp() {
     setIsSubmittingReport(true);
     
     try {
-      if (!navigator.onLine) throw new Error("Failed to fetch"); // Paksa error jika mati data
+      if (!navigator.onLine) throw new Error("Failed to fetch");
 
       let uploadedData = [];
       for (let i = 0; i < regulerPhotos.length; i++) {
@@ -756,8 +761,9 @@ export default function MobileApp() {
       setRegulerPhotos([]); setRegulerDesc(''); setIsRegulerFormOpen(false); fetchHistories(currentUser.id);
       setIsSubmittingReport(false);
     } catch (error) {
-      // JARING PENGAMAN OFFLINE ULTIMATE
-      if (error.message.includes('Failed to fetch') || error.message.includes('Network') || !navigator.onLine) {
+      // PENANGKAP ERROR ANTI-BOCOR
+      const errMsg = (error?.message || String(error)).toLowerCase();
+      if (errMsg.includes('failed to fetch') || errMsg.includes('network') || !navigator.onLine) {
         await saveOfflineData('LAPORAN', {
           photos: regulerPhotos, desc: regulerDesc, locName: 'Reguler Lapangan', reportType: 'reguler', 
           clientId: currentUser.client_id, employeeId: currentUser.id
@@ -766,7 +772,7 @@ export default function MobileApp() {
         alert("📡 Sinyal Lemah/Terputus! Laporan Reguler otomatis disimpan di HP dan akan dikirim saat sinyal stabil.");
         setRegulerPhotos([]); setRegulerDesc(''); setIsRegulerFormOpen(false); setActiveMenu('home');
       } else {
-        alert("Gagal kirim laporan: " + error.message);
+        alert("Gagal kirim laporan: " + (error?.message || 'Error tidak diketahui'));
       }
       setIsSubmittingReport(false);
     }
@@ -2203,7 +2209,7 @@ export default function MobileApp() {
           {/* ========================================== */}
           {/* === BOTTOM NAVIGATION BAR (FIXED) === */}
           {/* ========================================== */}
-          <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[447px] z-50">
+          <div className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[447px] z-[90] transition-transform duration-500 ease-in-out ${(activeMenu === 'home' || activeMenu === 'settings') ? 'translate-y-0' : 'translate-y-[150%]'}`}>
   
             {/* Container utama Navbar putih */}
             <div className="bg-white h-[76px] rounded-t-[2rem] shadow-[0_-8px_30px_rgba(0,0,0,0.08)] flex justify-between items-center px-6 relative">
