@@ -624,13 +624,27 @@ export default function MobileApp() {
   const startPatrolCamera = async (mode = 'environment') => {
     try {
       if (patrolCameraStream) patrolCameraStream.getTracks().forEach(t => t.stop());
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
+      
+      // Paksa browser mencari kamera yang sesuai
+      const constraints = { video: { facingMode: mode } };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
       setPatrolCameraStream(stream);
       if (patrolVideoRef.current) patrolVideoRef.current.srcObject = stream;
       setPatrolFacingMode(mode);
       setIsPatrolCameraOpen(true);
     } catch (err) {
-      alert("Gagal mengakses kamera.");
+      console.error(err);
+      // Fallback: Jika kamera belakang gagal/tidak ditemukan, paksa buka kamera apa saja
+      try {
+         const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true });
+         setPatrolCameraStream(fallbackStream);
+         if (patrolVideoRef.current) patrolVideoRef.current.srcObject = fallbackStream;
+         setPatrolFacingMode('user');
+         setIsPatrolCameraOpen(true);
+      } catch (fallbackErr) {
+         alert("Gagal mengakses modul kamera HP Anda.");
+      }
     }
   };
 
@@ -673,19 +687,8 @@ export default function MobileApp() {
     setIsSubmittingReport(true);
     
     try {
-      // CEK SINYAL OFFLINE
-      if (!navigator.onLine) {
-        await saveOfflineData('LAPORAN', {
-          photos: patrolPhotos, desc: patrolDesc, locName: patrolLocName, reportType: 'patroli', 
-          clientId: currentUser.client_id, employeeId: currentUser.id
-        });
-        checkPendingSync();
-        alert("📡 Sinyal Terputus! Laporan Patroli disimpan di HP dan akan dikirim otomatis saat sinyal kembali.");
-        setPatrolPhotos([]); setPatrolDesc(''); setPatrolLocStatus(null); setActiveMenu('home');
-        return setIsSubmittingReport(false);
-      }
+      if (!navigator.onLine) throw new Error("Failed to fetch"); // Paksa error jika HP jelas-jelas mati data
 
-      // PROSES ONLINE NORMAL
       let uploadedData = [];
       for (let i = 0; i < patrolPhotos.length; i++) {
         const photo = patrolPhotos[i];
@@ -706,9 +709,20 @@ export default function MobileApp() {
       if (error) throw error;
       alert("Laporan Patroli Berhasil Terkirim!");
       setPatrolPhotos([]); setPatrolDesc(''); setPatrolLocStatus(null); fetchHistories(currentUser.id);
+      setIsSubmittingReport(false);
     } catch (error) {
-      alert("Gagal kirim laporan: " + error.message);
-    } finally {
+      // JARING PENGAMAN OFFLINE ULTIMATE
+      if (error.message.includes('Failed to fetch') || error.message.includes('Network') || !navigator.onLine) {
+        await saveOfflineData('LAPORAN', {
+          photos: patrolPhotos, desc: patrolDesc, locName: patrolLocName, reportType: 'patroli', 
+          clientId: currentUser.client_id, employeeId: currentUser.id
+        });
+        checkPendingSync();
+        alert("📡 Sinyal Lemah/Terputus! Laporan Patroli otomatis disimpan di HP dan akan dikirim saat sinyal stabil.");
+        setPatrolPhotos([]); setPatrolDesc(''); setPatrolLocStatus(null); setActiveMenu('home');
+      } else {
+        alert("Gagal kirim laporan: " + error.message);
+      }
       setIsSubmittingReport(false);
     }
   };
@@ -718,19 +732,8 @@ export default function MobileApp() {
     setIsSubmittingReport(true);
     
     try {
-      // CEK SINYAL OFFLINE
-      if (!navigator.onLine) {
-        await saveOfflineData('LAPORAN', {
-          photos: regulerPhotos, desc: regulerDesc, locName: 'Reguler Lapangan', reportType: 'reguler', 
-          clientId: currentUser.client_id, employeeId: currentUser.id
-        });
-        checkPendingSync();
-        alert("📡 Sinyal Terputus! Laporan Reguler disimpan di HP dan akan dikirim otomatis saat sinyal kembali.");
-        setRegulerPhotos([]); setRegulerDesc(''); setIsRegulerFormOpen(false); setActiveMenu('home');
-        return setIsSubmittingReport(false);
-      }
+      if (!navigator.onLine) throw new Error("Failed to fetch"); // Paksa error jika mati data
 
-      // PROSES ONLINE NORMAL
       let uploadedData = [];
       for (let i = 0; i < regulerPhotos.length; i++) {
         const photo = regulerPhotos[i];
@@ -751,9 +754,20 @@ export default function MobileApp() {
       if (error) throw error;
       alert("Laporan Reguler Berhasil Terkirim!");
       setRegulerPhotos([]); setRegulerDesc(''); setIsRegulerFormOpen(false); fetchHistories(currentUser.id);
+      setIsSubmittingReport(false);
     } catch (error) {
-      alert("Gagal kirim laporan: " + error.message);
-    } finally {
+      // JARING PENGAMAN OFFLINE ULTIMATE
+      if (error.message.includes('Failed to fetch') || error.message.includes('Network') || !navigator.onLine) {
+        await saveOfflineData('LAPORAN', {
+          photos: regulerPhotos, desc: regulerDesc, locName: 'Reguler Lapangan', reportType: 'reguler', 
+          clientId: currentUser.client_id, employeeId: currentUser.id
+        });
+        checkPendingSync();
+        alert("📡 Sinyal Lemah/Terputus! Laporan Reguler otomatis disimpan di HP dan akan dikirim saat sinyal stabil.");
+        setRegulerPhotos([]); setRegulerDesc(''); setIsRegulerFormOpen(false); setActiveMenu('home');
+      } else {
+        alert("Gagal kirim laporan: " + error.message);
+      }
       setIsSubmittingReport(false);
     }
   };
@@ -2169,14 +2183,15 @@ export default function MobileApp() {
           {/* === MODAL: KAMERA LAPORAN (PATROLI & REGULER) === */}
           {/* ========================================== */}
           {isPatrolCameraOpen && (
-            <div className="absolute inset-0 bg-black z-50 flex flex-col">
+            <div className="fixed inset-0 bg-black z-[100] flex flex-col"> {/* <-- UBAH KE fixed DAN z-[100] AGAR MENUTUPI NAVBAR BAWAH */}
               <div className="px-5 pt-10 pb-4 flex justify-between items-center text-white bg-gradient-to-b from-black/80 to-transparent absolute top-0 w-full z-10">
                  <button onClick={stopPatrolCamera} className="p-2 bg-white/20 rounded-full active:scale-95"><X size={20}/></button>
                  <span className="font-bold text-sm">Foto Dokumentasi</span>
                  <button onClick={() => startPatrolCamera(patrolFacingMode === 'environment' ? 'user' : 'environment')} className="p-2 bg-white/20 rounded-full active:scale-95"><RefreshCw size={20}/></button>
               </div>
               <div className="flex-1 relative flex items-center justify-center overflow-hidden">
-                 <video ref={patrolVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" />
+                 {/* TAMBAHKAN 'muted' AGAR VIDEO OTOMATIS JALAN DI IOS/ANDROID */}
+                 <video ref={patrolVideoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover" />
                  <canvas ref={patrolCanvasRef} className="hidden" />
               </div>
               <div className="pb-10 pt-6 px-8 flex justify-center bg-gradient-to-t from-black/80 to-transparent absolute bottom-0 w-full z-10">
