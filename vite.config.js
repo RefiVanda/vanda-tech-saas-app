@@ -34,6 +34,10 @@ export default defineConfig({
       workbox: {
         // Ini yang bikin aplikasi kebal blank saat offline!
         globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg}'],
+        
+        // 👇 TAMBAHKAN BARIS INI (Menaikkan batas maksimal file ke 5 MB) 👇
+        maximumFileSizeToCacheInBytes: 5000000, 
+        
         runtimeCaching: [
           {
             // Simpan cache API/Font dari luar jika ada
@@ -50,6 +54,6 @@ export default defineConfig({
     })
   ],
   build: {
-    chunkSizeWarningLimit: 2000,
+    chunkSizeWarningLimit: 3000, 
   }
 })
