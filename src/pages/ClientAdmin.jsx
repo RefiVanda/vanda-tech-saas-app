@@ -5046,7 +5046,14 @@ export default function ClientAdmin() {
                   <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 mb-3">Override Menu Mobile App</h4>
                   <div className="grid grid-cols-2 gap-2">
                     {['absen', 'laporan', 'pengajuan', 'task', 'slip', ...customMenus.map(m => `custom_${m.id}`)]
-                      .filter(menu => menu !== 'task' || currentUser?.features?.task !== false) 
+                      .filter(menu => {
+                        // Sembunyikan checkbox jika fitur dimatikan Super Admin
+                        if (menu === 'task' && currentUser?.features?.task === false) return false;
+                        if (menu === 'laporan' && currentUser?.features?.laporan === false) return false;
+                        if (menu === 'pengajuan' && currentUser?.features?.approval === false) return false;
+                        if (menu === 'slip' && currentUser?.features?.finance === false) return false;
+                        return true;
+                      })
                       .map(menu => {
                       let isChecked = false;
                       if (editPermissions?.mobile && editPermissions.mobile[menu] !== undefined) {

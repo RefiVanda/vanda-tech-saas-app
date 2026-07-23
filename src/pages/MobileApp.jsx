@@ -52,25 +52,28 @@ export default function MobileApp() {
   const hasMobileMenu = (menuName) => {
     // 1. BLOKIR MUTLAK DARI SUPERADMIN (Jika fitur dimatikan dari luar)
     if (menuName === 'task' && clientFeatures?.task === false) return false;
+    if (menuName === 'laporan' && clientFeatures?.laporan === false) return false;
+    if (menuName === 'pengajuan' && clientFeatures?.approval === false) return false;
+    if (menuName === 'slip' && clientFeatures?.finance === false) return false;
 
-    // 2. CEK OVERRIDE PERORANGAN (Jika diset khusus per-pegawai)
+    // 2. CEK OVERRIDE PERORANGAN
     if (currentUser?.permissions?.mobile && currentUser.permissions.mobile[menuName] !== undefined) {
       return currentUser.permissions.mobile[menuName];
     }
 
-    // 3. CEK BAWAAN JABATAN / ROLE (Membaca checkbox matriks dari dasbor Admin)
+    // 3. CEK BAWAAN JABATAN / ROLE
     if (rolePermissions?.mobile && rolePermissions.mobile[menuName] !== undefined) {
       return rolePermissions.mobile[menuName];
     }
 
-    // 4. FALLBACK KHUSUS HANYA UNTUK DEVELOPER / SUPER ADMIN SAAS (Bukan Admin Perusahaan)
+    // 4. FALLBACK KHUSUS
     if (['Super Admin', 'Developer'].includes(currentUser?.role)) {
       return true;
     }
 
-    // Jika tidak dicentang di mana-mana, pastikan sembunyi!
     return false; 
   };
+  
   const [laporanTab, setLaporanTab] = useState('reguler');
   const currentHour = new Date().getHours();
   const greetingText = currentHour < 11 ? 'PAGI' : currentHour < 15 ? 'SIANG' : currentHour < 18 ? 'SORE' : 'MALAM';

@@ -18,7 +18,8 @@ export default function SuperAdmin() {
   const [globalStats, setGlobalStats] = useState({ totalClients: 0, totalUsers: 0, activeClients: 0 });
 
   // === DEFAULT FITUR SAAS ===
-  const defaultFeatures = { hris: true, shift: true, task: true, approval: true, laporan: true, finance: true, broadcast: true, settings: true };
+  // SESUDAH:
+const defaultFeatures = { hris: true, shift: true, task: true, approval: true, laporan: true, finance: true, broadcast: true, settings: true, form_builder: true };
 
   // === STATE PENCARIAN & FORM ===
   const [searchClientQuery, setSearchClientQuery] = useState('');
@@ -585,7 +586,8 @@ export default function SuperAdmin() {
                       { id: 'laporan', label: 'Laporan & Pengajuan' },
                       { id: 'finance', label: 'Finance & Reimburse' },
                       { id: 'broadcast', label: 'Informasi & Instruksi' },
-                      { id: 'settings', label: 'Pengaturan Sistem' }
+                      { id: 'settings', label: 'Pengaturan Sistem' },
+                      { id: 'form_builder', label: 'Form Builder (Custom)' }
                     ].map(mod => (
                       <label key={mod.id} className="flex items-center gap-2 cursor-pointer group">
                          <input type="checkbox" checked={clientForm.features?.[mod.id] !== false}
