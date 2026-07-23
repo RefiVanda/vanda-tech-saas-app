@@ -116,10 +116,9 @@ export default function MobileApp() {
 
     for (const item of queue) {
       try {
+        // --- 1. SINKRONISASI ABSENSI ---
         if (item.type === 'ABSEN') {
           const { absenPhoto, payloadDb, isCheckOut, attendanceId } = item.payload;
-          
-          // 1. Upload Foto Diam-diam di Latar Belakang
           const base64Response = await fetch(absenPhoto);
           const blob = await base64Response.blob();
           const fileName = `absen-sync-${Date.now()}.jpg`;
@@ -129,7 +128,6 @@ export default function MobileApp() {
 
           const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
           
-          // 2. Insert ke Database
           if (!isCheckOut) {
              payloadDb.photo_url = publicUrlData.publicUrl;
              await supabase.from('attendances').insert([payloadDb]);
@@ -138,18 +136,74 @@ export default function MobileApp() {
              await supabase.from('attendances').update(payloadDb).eq('id', attendanceId);
           }
         }
-        // Hapus antrean di HP jika sukses
+        
+        // --- 2. SINKRONISASI LAPORAN (PATROLI & REGULER) ---
+        else if (item.type === 'LAPORAN') {
+          const { photos, desc, locName, reportType, clientId, employeeId } = item.payload;
+          let uploadedData = [];
+          
+          // Upload semua foto di latar belakang
+          for (let i = 0; i < photos.length; i++) {
+            const photo = photos[i];
+            const base64Response = await fetch(photo.base64);
+            const blob = await base64Response.blob();
+            const fileName = `laporan-sync-${employeeId}-${Date.now()}-${i}.jpg`;
+            
+            await supabase.storage.from('attendance_photos').upload(fileName, blob);
+            const { data } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
+            uploadedData.push({ url: data.publicUrl, desc: photo.desc });
+          }
+
+          const descJson = JSON.stringify({ notes: desc, photos: uploadedData });
+          const titleLaporan = reportType === 'patroli' ? `Patroli di ${locName}` : `Laporan Reguler Lapangan`;
+          
+          await supabase.from('field_reports').insert([{
+            client_id: clientId, employee_id: employeeId, report_type: reportType, title: titleLaporan, description: descJson
+          }]);
+        }
+
+        // --- 3. SINKRONISASI PENGAJUAN (CUTI/IZIN) ---
+        else if (item.type === 'PENGAJUAN') {
+          const { payloadDb, lampiranFile, employeeId } = item.payload;
+          if (lampiranFile) {
+            const fileExt = lampiranFile.name.split('.').pop();
+            const fileName = `izin-sync-${employeeId}-${Date.now()}.${fileExt}`;
+            await supabase.storage.from('attendance_photos').upload(fileName, lampiranFile);
+            const { data } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
+            payloadDb.attachment_url = data.publicUrl;
+          }
+          await supabase.from('leave_requests').insert([payloadDb]);
+        }
+
+        // --- 4. SINKRONISASI REIMBURSEMENT ---
+        else if (item.type === 'REIMBURSE') {
+          const { payloadDb, receiptFile, employeeId } = item.payload;
+          const fileExt = receiptFile.name.split('.').pop();
+          const fileName = `reimburse-sync-${employeeId}-${Date.now()}.${fileExt}`;
+          await supabase.storage.from('attendance_photos').upload(fileName, receiptFile);
+          const { data } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
+          
+          payloadDb.receipt_url = data.publicUrl;
+          await supabase.from('reimbursements').insert([payloadDb]);
+        }
+
+        // --- 5. SINKRONISASI KOREKSI ABSEN ---
+        else if (item.type === 'KOREKSI') {
+          await supabase.from('attendance_corrections').insert([item.payload]);
+        }
+
+        // Hapus antrean di HP jika proses upload Supabase sukses
         await deleteOfflineData(item.id);
       } catch (err) {
         console.error("Gagal sync data tertunda:", item.id, err);
       }
     }
-    checkPendingSync();
     
-    // Tarik ulang data kehadiran agar UI ter-update
+    checkPendingSync();
+    // Tarik ulang data setelah sync selesai
     const session = JSON.parse(localStorage.getItem('vest_user_session') || '{}');
     if (session.id) { checkTodayAttendance(session.id); fetchHistories(session.id); }
-    alert("Koneksi Internet Pulih: Data absensi offline berhasil diunggah ke server!");
+    alert("Koneksi Internet Pulih: Semua data (Absen, Laporan, Pengajuan) berhasil disinkronisasi ke server!");
   };
 
   // Tambahkan ini di bawah state laporan / attendance history
@@ -617,7 +671,21 @@ export default function MobileApp() {
   const handlePatrolSubmit = async () => {
     if(patrolPhotos.length === 0) return alert("Minimal lampirkan 1 foto kegiatan!");
     setIsSubmittingReport(true);
+    
     try {
+      // CEK SINYAL OFFLINE
+      if (!navigator.onLine) {
+        await saveOfflineData('LAPORAN', {
+          photos: patrolPhotos, desc: patrolDesc, locName: patrolLocName, reportType: 'patroli', 
+          clientId: currentUser.client_id, employeeId: currentUser.id
+        });
+        checkPendingSync();
+        alert("📡 Sinyal Terputus! Laporan Patroli disimpan di HP dan akan dikirim otomatis saat sinyal kembali.");
+        setPatrolPhotos([]); setPatrolDesc(''); setPatrolLocStatus(null); setActiveMenu('home');
+        return setIsSubmittingReport(false);
+      }
+
+      // PROSES ONLINE NORMAL
       let uploadedData = [];
       for (let i = 0; i < patrolPhotos.length; i++) {
         const photo = patrolPhotos[i];
@@ -637,10 +705,7 @@ export default function MobileApp() {
 
       if (error) throw error;
       alert("Laporan Patroli Berhasil Terkirim!");
-      setPatrolPhotos([]);
-      setPatrolDesc('');
-      setPatrolLocStatus(null);
-      fetchHistories(currentUser.id);
+      setPatrolPhotos([]); setPatrolDesc(''); setPatrolLocStatus(null); fetchHistories(currentUser.id);
     } catch (error) {
       alert("Gagal kirim laporan: " + error.message);
     } finally {
@@ -651,7 +716,21 @@ export default function MobileApp() {
   const handleRegulerSubmit = async () => {
     if(regulerPhotos.length === 0 && !regulerDesc) return alert("Wajib mengisi keterangan atau melampirkan minimal 1 foto!");
     setIsSubmittingReport(true);
+    
     try {
+      // CEK SINYAL OFFLINE
+      if (!navigator.onLine) {
+        await saveOfflineData('LAPORAN', {
+          photos: regulerPhotos, desc: regulerDesc, locName: 'Reguler Lapangan', reportType: 'reguler', 
+          clientId: currentUser.client_id, employeeId: currentUser.id
+        });
+        checkPendingSync();
+        alert("📡 Sinyal Terputus! Laporan Reguler disimpan di HP dan akan dikirim otomatis saat sinyal kembali.");
+        setRegulerPhotos([]); setRegulerDesc(''); setIsRegulerFormOpen(false); setActiveMenu('home');
+        return setIsSubmittingReport(false);
+      }
+
+      // PROSES ONLINE NORMAL
       let uploadedData = [];
       for (let i = 0; i < regulerPhotos.length; i++) {
         const photo = regulerPhotos[i];
@@ -671,10 +750,7 @@ export default function MobileApp() {
 
       if (error) throw error;
       alert("Laporan Reguler Berhasil Terkirim!");
-      setRegulerPhotos([]);
-      setRegulerDesc('');
-      setIsRegulerFormOpen(false);
-      fetchHistories(currentUser.id);
+      setRegulerPhotos([]); setRegulerDesc(''); setIsRegulerFormOpen(false); fetchHistories(currentUser.id);
     } catch (error) {
       alert("Gagal kirim laporan: " + error.message);
     } finally {
@@ -745,41 +821,38 @@ export default function MobileApp() {
     
     setIsSubmittingPengajuan(true);
     try {
-      let finalAttachmentUrl = null;
+      const payload = {
+        client_id: currentUser.client_id, employee_id: currentUser.id,
+        request_type: activeMenu === 'form_cuti' ? 'CUTI' : 'IZIN',
+        category: pengajuanForm.jenis || (activeMenu === 'form_cuti' ? 'Tahunan' : 'Sakit'),
+        start_date: pengajuanForm.startDate, end_date: pengajuanForm.endDate || pengajuanForm.startDate, 
+        reason: pengajuanForm.alasan, attachment_url: null, status: 'PENDING'
+      };
 
-      // Proses Upload Lampiran
+      // CEK SINYAL OFFLINE
+      if (!navigator.onLine) {
+        await saveOfflineData('PENGAJUAN', { payloadDb: payload, lampiranFile: pengajuanForm.lampiran, employeeId: currentUser.id });
+        checkPendingSync();
+        alert("📡 Sinyal Terputus! Pengajuan disimpan di HP dan akan dikirim otomatis saat sinyal kembali.");
+        setActiveMenu('pengajuan'); setPengajuanForm({ jenis: '', startDate: '', endDate: '', alasan: '', lampiran: null });
+        return setIsSubmittingPengajuan(false);
+      }
+
+      // PROSES ONLINE NORMAL (Upload File ke Supabase)
       if (pengajuanForm.lampiran) {
         const file = pengajuanForm.lampiran;
         const fileExt = file.name.split('.').pop();
         const fileName = `izin-${currentUser.id}-${Date.now()}.${fileExt}`;
-        
         const { error: uploadError } = await supabase.storage.from('attendance_photos').upload(fileName, file);
         if (uploadError) throw uploadError;
-
         const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
-        finalAttachmentUrl = publicUrlData.publicUrl;
+        payload.attachment_url = publicUrlData.publicUrl;
       }
-
-      // Siapkan Payload Data ke Database
-      const payload = {
-        client_id: currentUser.client_id,
-        employee_id: currentUser.id,
-        request_type: activeMenu === 'form_cuti' ? 'CUTI' : 'IZIN',
-        category: pengajuanForm.jenis || (activeMenu === 'form_cuti' ? 'Tahunan' : 'Sakit'),
-        start_date: pengajuanForm.startDate,
-        end_date: pengajuanForm.endDate || pengajuanForm.startDate, 
-        reason: pengajuanForm.alasan,
-        attachment_url: finalAttachmentUrl,
-        status: 'PENDING'
-      };
 
       const { error } = await supabase.from('leave_requests').insert([payload]);
       if (error) throw error;
-
       alert("Berhasil! Pengajuan Anda sudah terkirim ke HRD.");
-      setActiveMenu('pengajuan'); 
-      setPengajuanForm({ jenis: '', startDate: '', endDate: '', alasan: '', lampiran: null });
-      fetchHistories(currentUser.id);
+      setActiveMenu('pengajuan'); setPengajuanForm({ jenis: '', startDate: '', endDate: '', alasan: '', lampiran: null }); fetchHistories(currentUser.id);
     } catch (error) {
       alert("Gagal mengirim pengajuan: " + error.message);
     } finally {
@@ -788,40 +861,38 @@ export default function MobileApp() {
   };
 
   const handleReimburseSubmit = async () => {
-    if (!reimburseForm.amount || !reimburseForm.description || !reimburseForm.receipt) {
-      return alert("Harap isi nominal, keterangan, dan lampirkan foto struk/nota!");
-    }
+    if (!reimburseForm.amount || !reimburseForm.description || !reimburseForm.receipt) return alert("Harap isi nominal, keterangan, dan lampirkan foto struk/nota!");
     
     setIsSubmittingReimburse(true);
     try {
-      // 1. Upload Struk/Nota
+      const payload = {
+        client_id: currentUser.client_id, employee_id: currentUser.id, category: reimburseForm.category,
+        amount: parseFloat(reimburseForm.amount), description: reimburseForm.description, receipt_url: null, status: 'PENDING'
+      };
+
+      // CEK SINYAL OFFLINE
+      if (!navigator.onLine) {
+        await saveOfflineData('REIMBURSE', { payloadDb: payload, receiptFile: reimburseForm.receipt, employeeId: currentUser.id });
+        checkPendingSync();
+        alert("📡 Sinyal Terputus! Reimbursement disimpan di HP dan akan dikirim otomatis saat sinyal kembali.");
+        setActiveMenu('pengajuan'); setReimburseForm({ category: 'Transportasi', amount: '', description: '', receipt: null });
+        return setIsSubmittingReimburse(false);
+      }
+
+      // PROSES ONLINE NORMAL
       const file = reimburseForm.receipt;
       const fileExt = file.name.split('.').pop();
       const fileName = `reimburse-${currentUser.id}-${Date.now()}.${fileExt}`;
-      
       const { error: uploadError } = await supabase.storage.from('attendance_photos').upload(fileName, file);
       if (uploadError) throw uploadError;
-
       const { data: publicUrlData } = supabase.storage.from('attendance_photos').getPublicUrl(fileName);
       
-      // 2. Simpan ke database
-      const payload = {
-        client_id: currentUser.client_id,
-        employee_id: currentUser.id,
-        category: reimburseForm.category,
-        amount: parseFloat(reimburseForm.amount),
-        description: reimburseForm.description,
-        receipt_url: publicUrlData.publicUrl,
-        status: 'PENDING'
-      };
-
+      payload.receipt_url = publicUrlData.publicUrl;
       const { error } = await supabase.from('reimbursements').insert([payload]);
       if (error) throw error;
 
       alert("Berhasil! Pengajuan Reimbursement terkirim ke Finance.");
-      setActiveMenu('pengajuan'); 
-      setReimburseForm({ category: 'Transportasi', amount: '', description: '', receipt: null });
-      fetchHistories(currentUser.id);
+      setActiveMenu('pengajuan'); setReimburseForm({ category: 'Transportasi', amount: '', description: '', receipt: null }); fetchHistories(currentUser.id);
     } catch (error) {
       alert("Gagal mengirim reimburse: " + error.message);
     } finally {
@@ -843,23 +914,26 @@ export default function MobileApp() {
     setIsSubmittingKoreksi(true);
     try {
       const payload = {
-        client_id: currentUser.client_id,
-        employee_id: currentUser.id,
-        date: koreksiForm.date,
-        correction_type: koreksiForm.type,
-        time_in: koreksiForm.type !== 'OUT' ? koreksiForm.timeIn : null,
-        time_out: koreksiForm.type !== 'IN' ? koreksiForm.timeOut : null,
-        reason: koreksiForm.reason,
-        status: 'PENDING'
+        client_id: currentUser.client_id, employee_id: currentUser.id, date: koreksiForm.date, correction_type: koreksiForm.type,
+        time_in: koreksiForm.type !== 'OUT' ? koreksiForm.timeIn : null, time_out: koreksiForm.type !== 'IN' ? koreksiForm.timeOut : null,
+        reason: koreksiForm.reason, status: 'PENDING'
       };
 
+      // CEK SINYAL OFFLINE
+      if (!navigator.onLine) {
+        await saveOfflineData('KOREKSI', payload);
+        checkPendingSync();
+        alert("📡 Sinyal Terputus! Pengajuan koreksi disimpan di HP dan akan dikirim otomatis saat sinyal kembali.");
+        setActiveMenu('pengajuan'); setKoreksiForm({ date: '', type: 'OUT', timeIn: '', timeOut: '', reason: '' });
+        return setIsSubmittingKoreksi(false);
+      }
+
+      // PROSES ONLINE NORMAL
       const { error } = await supabase.from('attendance_corrections').insert([payload]);
       if (error) throw error;
 
       alert("Berhasil! Pengajuan Perbaikan Absen terkirim ke HRD.");
-      setActiveMenu('pengajuan'); 
-      setKoreksiForm({ date: '', type: 'OUT', timeIn: '', timeOut: '', reason: '' });
-      fetchHistories(currentUser.id);
+      setActiveMenu('pengajuan'); setKoreksiForm({ date: '', type: 'OUT', timeIn: '', timeOut: '', reason: '' }); fetchHistories(currentUser.id);
     } catch (error) {
       alert("Gagal mengirim perbaikan: " + error.message);
     } finally {
